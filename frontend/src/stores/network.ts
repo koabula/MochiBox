@@ -8,7 +8,8 @@ export const useNetworkStore = defineStore('network', () => {
         online: false,
         peers: 0,
         peer_id: '',
-        addresses: [] as string[]
+        addresses: [] as string[],
+        data_dir: ''
     });
     
     const pollInterval = ref<any>(null);
@@ -20,7 +21,7 @@ export const useNetworkStore = defineStore('network', () => {
             status.value = res.data;
         } catch (e) {
             // Connection error to backend
-            status.value = { online: false, peers: 0, peer_id: '', addresses: [] };
+            status.value = { online: false, peers: 0, peer_id: '', addresses: [], data_dir: '' };
         }
     }
 

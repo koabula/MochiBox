@@ -50,6 +50,58 @@ const handleDownload = async () => {
     // Auto-close modal
     closeModal();
 
+    // Check settings for "Always ask" or missing path
+    if (settingsStore.askPath || !settingsStore.downloadPath) {
+        try {
+            // @ts-ignore
+            if (window.showSaveFilePicker) {
+                // @ts-ignore
+                const handle = await window.showSaveFilePicker({
+                    suggestedName: filename
+                });
+                
+                const taskId = taskStore.addTask('download', filename);
+                toastStore.success(`Download started for ${filename}`);
+                
+                try {
+                    const writable = await handle.createWritable();
+                    const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
+                    const url = `${baseUrl}/preview/${props.sharedData.cid}?download=true`;
+                    
+                    const response = await fetch(url);
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+                    if (!response.body) throw new Error("No response body");
+                    
+                    const total = Number(response.headers.get('content-length')) || 0;
+                    let loaded = 0;
+                    
+                    const reader = response.body.getReader();
+                    
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        loaded += value.length;
+                        if (total) taskStore.updateProgress(taskId, loaded, total);
+                        await writable.write(value);
+                    }
+                    
+                    await writable.close();
+                    taskStore.completeTask(taskId);
+                    return; 
+                    
+                } catch (e: any) {
+                    console.error(e);
+                    taskStore.failTask(taskId, e.message);
+                    toastStore.error(`Download failed: ${e.message}`);
+                    return;
+                }
+            }
+        } catch (err: any) {
+            if (err.name === 'AbortError') return;
+            console.warn("FileSystemAccess API not supported or failed, falling back to default download", err);
+        }
+    }
+
     // If settingsStore.downloadPath is set and "Ask" is false, we use the Backend to save silently
     if (!settingsStore.askPath && settingsStore.downloadPath) {
         const taskId = taskStore.addTask('download', filename);
@@ -74,7 +126,7 @@ const handleDownload = async () => {
     toastStore.success('Download started');
     
     try {
-        const url = `/api/preview/${props.sharedData.cid}?download=true`;
+        const url = `/preview/${props.sharedData.cid}?download=true`;
         
         const response = await api.get(url, {
             responseType: 'blob',

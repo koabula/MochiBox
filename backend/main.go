@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,7 +23,21 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	dataDir := filepath.Join(home, ".mochibox")
+	
+	// Check for .pointer file in default location
+	defaultBase := filepath.Join(home, ".mochibox")
+	pointerPath := filepath.Join(defaultBase, ".pointer")
+	
+	dataDir := defaultBase
+	
+	if content, err := os.ReadFile(pointerPath); err == nil {
+		customPath := strings.TrimSpace(string(content))
+		if customPath != "" {
+			dataDir = customPath
+			log.Printf("Using custom data directory: %s", dataDir)
+		}
+	}
+
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatal(err)
 	}

@@ -208,7 +208,11 @@ func (s *Server) handleDeleteFile(c *gin.Context, database *gorm.DB) {
 		return
 	}
 
-	// TODO: Unpin from IPFS (s.Node.Unpin(file.CID))
+	// Unpin from IPFS
+	if err := s.Node.Unpin(c.Request.Context(), file.CID); err != nil {
+		// Just log error, don't stop DB deletion
+		fmt.Printf("Warning: Failed to unpin CID %s: %v\n", file.CID, err)
+	}
 
 	if err := database.Delete(&file).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to delete file"})

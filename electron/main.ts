@@ -48,6 +48,10 @@ function createWindow() {
     }
   });
   ipcMain.on('window-close', () => mainWindow?.close());
+  ipcMain.on('app-restart', () => {
+    app.relaunch();
+    app.exit(0);
+  });
 
   // Debugging hooks
   mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {

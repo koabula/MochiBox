@@ -98,10 +98,26 @@ func (n *MochiNode) AddFile(ctx context.Context, reader io.Reader) (string, erro
 	// Add to IPFS
 	p, err := n.IPFS.Unixfs().Add(ctx, node)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to add file to IPFS: %w", err)
 	}
 	
 	return p.RootCid().String(), nil
+}
+
+// Unpin removes a pin for the given CID
+func (n *MochiNode) Unpin(ctx context.Context, cidStr string) error {
+	cidPath, err := path.NewPath("/ipfs/" + cidStr)
+	if err != nil {
+		return fmt.Errorf("invalid CID: %w", err)
+	}
+
+	// Rm returns a channel of changes, but we just wait for it to finish or error
+	err = n.IPFS.Pin().Rm(ctx, cidPath)
+	if err != nil {
+		return fmt.Errorf("failed to unpin CID: %w", err)
+	}
+
+	return nil
 }
 
 func (n *MochiNode) GetFile(ctx context.Context, cidStr string) (io.Reader, error) {

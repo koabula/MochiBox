@@ -80,6 +80,12 @@ const handlePreview = (file: any) => {
 };
 
 const handleDownload = async (file: any) => {
+    // Validate CID
+    if (!file.cid) {
+        toastStore.error("Error: File CID is missing. Please re-upload this file.");
+        return;
+    }
+
     // Determine where to save
     let downloadPath = '';
     
@@ -119,10 +125,12 @@ const handleDownload = async (file: any) => {
                 
                 try {
                     const writable = await handle.createWritable();
-                    const url = `http://localhost:3666/api/preview/${file.cid}?download=true`;
+                    const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
+                    const url = `${baseUrl}/preview/${file.cid}?download=true`;
                     
                     // We need to fetch as stream and pipe to writable
                     const response = await fetch(url);
+                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
                     if (!response.body) throw new Error("No response body");
                     
                     const total = Number(response.headers.get('content-length')) || 0;
@@ -205,7 +213,7 @@ const handleDownload = async (file: any) => {
     toastStore.success(`Download started for ${file.name}`);
     
     try {
-        const url = `http://localhost:3666/api/preview/${file.cid}?download=true`;
+        const url = `/preview/${file.cid}?download=true`;
         
         const response = await api.get(url, {
             responseType: 'blob',
@@ -269,6 +277,25 @@ const handleShare = (file: any) => {
     }
     shareExportFile.value = file;
     showShareExportModal.value = true;
+};
+
+const dataDirPath = ref('');
+
+const handleUpdateDataDir = async () => {
+    if (!dataDirPath.value) return;
+    if (!confirm('This will move your data to the new location and restart the application. Are you sure?')) return;
+    
+    try {
+        await settingsStore.setDataDir(dataDirPath.value);
+        toastStore.success('Data moved. Application restarting...');
+        // Wait for shutdown
+        setTimeout(() => {
+           // @ts-ignore
+           window.electronAPI?.restart();
+        }, 3000);
+    } catch (e: any) {
+        toastStore.error(e.response?.data?.error || 'Failed to move data');
+    }
 };
 </script>
 
@@ -381,7 +408,7 @@ const handleShare = (file: any) => {
                                 placeholder="Absolute path (e.g. C:\Users\Name\Downloads)"
                                 class="flex-1 px-3 py-2 rounded-lg border border-nord-4 dark:border-nord-3 bg-white dark:bg-nord-0 text-sm font-mono"
                              />
-                             <button @click="settingsStore.updateSettings(settingsStore.downloadPath, settingsStore.askPath, settingsStore.ipfsApiUrl)" class="px-4 py-2 bg-nord-10 text-white rounded-lg text-sm font-medium hover:bg-nord-9">Save</button>
+                             <button @click="settingsStore.updateSettings(settingsStore.downloadPath, settingsStore.askPath, settingsStore.ipfsApiUrl, settingsStore.useEmbeddedNode)" class="px-4 py-2 bg-nord-10 text-white rounded-lg text-sm font-medium hover:bg-nord-9">Save</button>
                          </div>
                          <p class="text-xs text-nord-3 mt-1">Files will be saved to this folder on your computer.</p>
                      </div>
@@ -399,22 +426,52 @@ const handleShare = (file: any) => {
                  </div>
             </div>
 
+             <div class="space-y-4">
+                 <h3 class="text-lg font-bold text-nord-1 dark:text-nord-6">Data Storage</h3>
+                 <div class="bg-nord-6 dark:bg-nord-1 p-4 rounded-xl border border-nord-4 dark:border-nord-2 space-y-4">
+                     <div>
+                         <label class="text-xs font-bold text-nord-3 dark:text-nord-4 uppercase">Storage Location</label>
+                         <div class="flex gap-2 mt-1">
+                             <input 
+                                v-model="dataDirPath" 
+                                type="text" 
+                                :placeholder="networkStore.status.data_dir || 'Enter absolute path (e.g. D:\\MochiData)'"
+                                class="flex-1 px-3 py-2 rounded-lg border border-nord-4 dark:border-nord-3 bg-white dark:bg-nord-0 text-sm font-mono"
+                             />
+                             <button @click="handleUpdateDataDir" class="px-4 py-2 bg-nord-10 text-white rounded-lg text-sm font-medium hover:bg-nord-9 whitespace-nowrap">Move & Restart</button>
+                         </div>
+                         <p class="text-xs text-nord-3 mt-1">
+                            Current: <span class="font-mono bg-nord-5 dark:bg-nord-2 px-1 rounded">{{ networkStore.status.data_dir }}</span>
+                            <br/>
+                            Move your database and IPFS repository to a new location. <span class="text-red-500">App will restart.</span>
+                         </p>
+                     </div>
+                 </div>
+            </div>
+
             <!-- IPFS Connection Settings -->
             <div class="space-y-4">
                  <h3 class="text-lg font-bold text-nord-1 dark:text-nord-6">IPFS Node Connection</h3>
                  <div class="bg-nord-6 dark:bg-nord-1 p-4 rounded-xl border border-nord-4 dark:border-nord-2 space-y-4">
                      
                      <!-- Embedded Node Toggle -->
-                     <div class="flex items-center gap-3 pb-4 border-b border-nord-4 dark:border-nord-2">
-                         <input 
-                            type="checkbox" 
-                            id="useEmbedded"
-                            v-model="settingsStore.useEmbeddedNode"
-                            @change="settingsStore.updateSettings(settingsStore.downloadPath, settingsStore.askPath, settingsStore.ipfsApiUrl, settingsStore.useEmbeddedNode)"
-                            class="w-4 h-4 rounded border-nord-4 dark:border-nord-3 text-nord-10 focus:ring-nord-10"
-                         />
+                     <div class="flex items-center gap-4 pb-4 border-b border-nord-4 dark:border-nord-2">
+                         <button 
+                            @click="settingsStore.updateSettings(settingsStore.downloadPath, settingsStore.askPath, settingsStore.ipfsApiUrl, !settingsStore.useEmbeddedNode)"
+                            class="relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-nord-10 focus:ring-offset-2"
+                            :class="settingsStore.useEmbeddedNode ? 'bg-nord-10' : 'bg-nord-4 dark:bg-nord-3'"
+                            role="switch"
+                            :aria-checked="settingsStore.useEmbeddedNode"
+                         >
+                            <span class="sr-only">Use Built-in IPFS Node</span>
+                            <span 
+                                aria-hidden="true" 
+                                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                                :class="settingsStore.useEmbeddedNode ? 'translate-x-5' : 'translate-x-0'"
+                            ></span>
+                         </button>
                          <div>
-                             <label for="useEmbedded" class="text-sm font-bold text-nord-1 dark:text-nord-5 select-none block">Use Built-in IPFS Node (Recommended)</label>
+                             <span class="text-sm font-bold text-nord-1 dark:text-nord-5 select-none block">Use Built-in IPFS Node (Recommended)</span>
                              <p class="text-xs text-nord-3 flex items-center gap-2">
                                 Automatically manages a local IPFS node for you.
                                 <span v-if="networkStore.isStarting" class="text-amber-500 font-medium flex items-center gap-1">

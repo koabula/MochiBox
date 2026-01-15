@@ -109,11 +109,11 @@ func (m *IpfsManager) ConfigRepo() error {
 	// Set custom config to avoid conflicts
 	// We use port 0 for API and Gateway to let OS assign random ports
 	configs := [][]string{
-		{"Addresses.API", "/ip4/127.0.0.1/tcp/0"},
-		{"Addresses.Gateway", "/ip4/127.0.0.1/tcp/0"},
+		{"Addresses.API", `"/ip4/127.0.0.1/tcp/0"`},
+		{"Addresses.Gateway", `"/ip4/127.0.0.1/tcp/0"`},
 		// Enable CORS for frontend
-		{"API.HTTPHeaders.Access-Control-Allow-Origin", "['http://localhost:5173', 'app://*']"},
-		{"API.HTTPHeaders.Access-Control-Allow-Methods", "['PUT', 'POST', 'GET']"},
+		{"API.HTTPHeaders.Access-Control-Allow-Origin", `["http://localhost:5173", "app://*"]`},
+		{"API.HTTPHeaders.Access-Control-Allow-Methods", `["PUT", "POST", "GET"]`},
 	}
 
 	for _, cfg := range configs {
