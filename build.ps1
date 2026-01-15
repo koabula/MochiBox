@@ -1,35 +1,29 @@
 # MochiBox Build Script
 $ErrorActionPreference = "Stop"
 
-Write-Host "Checking/Downloading Kubo Binary..."
+Write-Host "1. Downloading Multi-platform IPFS Binaries..."
 node scripts/download-kubo.js
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "Building Go Backend..."
-Push-Location backend
-go build -o mochibox-core.exe
+Write-Host "2. Building Go Backend (Cross-Compile)..."
+node scripts/build-backend.js
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-Pop-Location
 
-Write-Host "Building Frontend..."
+Write-Host "3. Building Frontend..."
 Push-Location frontend
 npm run build
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 Pop-Location
 
-Write-Host "Preparing Electron..."
+Write-Host "4. Preparing Electron..."
 Push-Location electron
-# Ensure bin directory exists
-if (-not (Test-Path "resources/bin")) {
-    New-Item -ItemType Directory -Force -Path "resources/bin"
-}
-Copy-Item ../backend/mochibox-core.exe resources/bin/
-
-Write-Host "Building Electron App..."
-# npm run build # Or electron-builder
-# For now, we just ensure it compiles
 npm run build
-# npx electron-builder --win --x64
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+Write-Host "Build Prep Complete!"
+Write-Host "To package for specific platforms, run inside 'electron' directory:"
+Write-Host "  npm run dist -- --win"
+Write-Host "  npm run dist -- --linux"
+Write-Host "  npm run dist -- --mac"
 Pop-Location
 
-Write-Host "Build Complete!"

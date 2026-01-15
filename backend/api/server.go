@@ -13,10 +13,13 @@ type Server struct {
 	Router      *gin.Engine
 	DB          *gorm.DB
 	IpfsManager *core.IpfsManager
+	ShutdownChan chan bool
 }
 
 func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManager) *Server {
 	r := gin.Default()
+	// Trust only local proxies to avoid security warning
+	_ = r.SetTrustedProxies([]string{"127.0.0.1"})
 	
 	// CORS for Electron
 	r.Use(func(c *gin.Context) {
@@ -35,6 +38,7 @@ func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManage
 		Router:      r,
 		DB:          database,
 		IpfsManager: ipfsMgr,
+		ShutdownChan: make(chan bool),
 	}
 	s.RegisterRoutes()
 	return s

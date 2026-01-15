@@ -1,5 +1,6 @@
 {
-  "name": "electron",
+  "name": "mochibox",
+  "productName": "MochiBox",
   "version": "1.0.0",
   "main": "dist/main.js",
   "scripts": {
@@ -20,31 +21,60 @@
   },
   "build": {
     "productName": "MochiBox",
-    "appId": "com.mochibox.app",
+    "appId": "com.mochibox.desktop",
+    "artifactName": "MochiBox-${version}.${ext}",
     "directories": {
       "output": "dist_electron"
     },
     "files": [
       "dist/**/*",
-      "package.json"
-    ],
-    "extraResources": [
+      "package.json",
       {
-        "from": "resources/bin",
-        "to": "bin",
+        "from": "../frontend/dist",
+        "to": "frontend/dist",
         "filter": [
           "**/*"
         ]
       }
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico",
+      "executableName": "MochiBox",
+      "extraResources": [
+        {
+          "from": "resources/bin/win",
+          "to": "bin",
+          "filter": ["**/*"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "MochiBox"
     },
     "mac": {
-      "target": "dmg"
+      "target": "dmg",
+      "extraResources": [
+        {
+          "from": "resources/bin/mac",
+          "to": "bin",
+          "filter": ["**/*"]
+        }
+      ]
     },
     "linux": {
-      "target": "AppImage"
+      "target": "AppImage",
+      "extraResources": [
+        {
+          "from": "resources/bin/linux",
+          "to": "bin",
+          "filter": ["**/*"]
+        }
+      ]
     }
   }
 }

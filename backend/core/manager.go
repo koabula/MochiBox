@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"strconv"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -40,11 +42,24 @@ func NewIpfsManager(dataDir string) (*IpfsManager, error) {
 	}
 
 	binPath := ""
-	for _, p := range possiblePaths {
-		abs, _ := filepath.Abs(p)
-		if _, err := os.Stat(abs); err == nil {
-			binPath = abs
-			break
+	
+	// 1. Check env var first (from Electron)
+	if envPath := os.Getenv("MOCHIBOX_IPFS_BIN"); envPath != "" {
+		if _, err := os.Stat(envPath); err == nil {
+			binPath = envPath
+			log.Printf("Using IPFS binary from env: %s\n", binPath)
+		} else {
+			log.Printf("IPFS binary from env not found: %s\n", envPath)
+		}
+	}
+
+	if binPath == "" {
+		for _, p := range possiblePaths {
+			abs, _ := filepath.Abs(p)
+			if _, err := os.Stat(abs); err == nil {
+				binPath = abs
+				break
+			}
 		}
 	}
 
@@ -123,6 +138,19 @@ func (m *IpfsManager) Start(ctx context.Context) error {
 		return fmt.Errorf("ipfs binary not found")
 	}
 
+	// If repo.lock exists, try to gracefully shutdown any lingering daemon
+	lockPath := filepath.Join(m.DataDir, "repo.lock")
+	if _, err := os.Stat(lockPath); err == nil {
+		// Try API shutdown first
+		if m.ApiAddr != "" {
+			_ = tryShutdownAPI(m.ApiAddr)
+			time.Sleep(1 * time.Second)
+		}
+		// Try CLI shutdown as fallback
+		_ = tryShutdownCLI(m.BinPath, m.DataDir)
+		time.Sleep(1 * time.Second)
+	}
+
 	// Remove api file if exists to avoid reading stale address
 	os.Remove(filepath.Join(m.DataDir, "api"))
 	os.Remove(filepath.Join(m.DataDir, "gateway"))
@@ -135,6 +163,7 @@ func (m *IpfsManager) Start(ctx context.Context) error {
 	stderr, _ := cmd.StderrPipe()
 	
 	if err := cmd.Start(); err != nil {
+		log.Printf("Failed to start IPFS daemon: %v", err)
 		return err
 	}
 	m.Cmd = cmd
@@ -146,7 +175,7 @@ func (m *IpfsManager) Start(ctx context.Context) error {
 	// This confirms the daemon is ready and tells us the port
 	apiFile := filepath.Join(m.DataDir, "api")
 	
-	timeout := time.After(30 * time.Second)
+	timeout := time.After(60 * time.Second)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -193,16 +222,26 @@ func (m *IpfsManager) Stop() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Prefer graceful shutdown via API if possible
+	if m.ApiAddr != "" {
+		if err := tryShutdownAPI(m.ApiAddr); err == nil {
+			time.Sleep(500 * time.Millisecond)
+		}
+	}
+
+	// Fallback to CLI shutdown
+	_ = tryShutdownCLI(m.BinPath, m.DataDir)
+
+	// If we still have a running process, force kill
 	if m.Cmd != nil && m.Cmd.Process != nil {
-		// Try graceful shutdown
 		if runtime.GOOS == "windows" {
-			m.Cmd.Process.Kill() // Windows often needs kill
+			// Kill entire process tree
+			_ = exec.Command("taskkill", "/T", "/F", "/PID", strconv.Itoa(m.Cmd.Process.Pid)).Run()
 		} else {
 			m.Cmd.Process.Signal(os.Interrupt)
+			time.Sleep(500 * time.Millisecond)
+			m.Cmd.Process.Kill()
 		}
-		
-		// Wait a bit?
-		// We don't block here strictly
 		m.Cmd = nil
 	}
 	return nil
@@ -233,4 +272,32 @@ func MultiaddrToHttp(maStr string) string {
 		return fmt.Sprintf("http://%s:%s", parts[2], parts[4])
 	}
 	return ""
+}
+
+// tryShutdownAPI calls /api/v0/shutdown on the managed API address
+func tryShutdownAPI(apiAddr string) error {
+	url := MultiaddrToHttp(apiAddr)
+	if url == "" {
+		return fmt.Errorf("invalid api addr")
+	}
+	_, err := http.Post(url+"/api/v0/shutdown", "application/json", nil)
+	if err != nil {
+		log.Printf("API shutdown failed: %v", err)
+		return err
+	}
+	return nil
+}
+
+// tryShutdownCLI executes `ipfs shutdown` with IPFS_PATH to gracefully stop daemon
+func tryShutdownCLI(binPath, dataDir string) error {
+	if binPath == "" {
+		return fmt.Errorf("no ipfs bin")
+	}
+	cmd := exec.Command(binPath, "shutdown")
+	cmd.Env = append(os.Environ(), "IPFS_PATH="+dataDir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("CLI shutdown failed: %v, out: %s", err, string(out))
+		return err
+	}
+	return nil
 }

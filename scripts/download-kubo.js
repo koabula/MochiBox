@@ -3,100 +3,129 @@ const path = require('path');
 const https = require('https');
 const { execSync } = require('child_process');
 
-const KUBO_VERSION = 'v0.26.0'; // 使用较新且稳定的版本
-const PLATFORM = process.platform;
-const ARCH = process.arch;
+const KUBO_VERSION = 'v0.26.0';
+const BASE_OUTPUT_DIR = path.join(__dirname, '../electron/resources/bin');
 
-const OUTPUT_DIR = path.join(__dirname, '../electron/resources/bin');
+// Define targets
+const targets = [
+    { platform: 'windows', arch: 'amd64', folder: 'win', ext: 'zip', binary: 'ipfs.exe' },
+    { platform: 'linux', arch: 'amd64', folder: 'linux', ext: 'tar.gz', binary: 'ipfs' },
+    { platform: 'darwin', arch: 'amd64', folder: 'mac', ext: 'tar.gz', binary: 'ipfs' }
+];
 
-if (!fs.existsSync(OUTPUT_DIR)) {
-    fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+// Ensure base dir exists
+if (!fs.existsSync(BASE_OUTPUT_DIR)) {
+    fs.mkdirSync(BASE_OUTPUT_DIR, { recursive: true });
 }
 
-// 映射 Node.js 平台/架构到 Kubo 命名
-const mapPlatform = (p) => {
-    if (p === 'win32') return 'windows';
-    return p;
+async function downloadFile(url, dest) {
+    return new Promise((resolve, reject) => {
+        const file = fs.createWriteStream(dest);
+        https.get(url, (response) => {
+            if (response.statusCode !== 200) {
+                reject(new Error(`Failed to download: ${response.statusCode}`));
+                return;
+            }
+            response.pipe(file);
+            file.on('finish', () => {
+                file.close(() => resolve());
+            });
+        }).on('error', (err) => {
+            fs.unlink(dest, () => {});
+            reject(err);
+        });
+    });
 }
 
-const mapArch = (a) => {
-    if (a === 'x64') return 'amd64';
-    if (a === 'arm64') return 'arm64';
-    return a;
+function extractAndMove(archivePath, targetFolder, binaryName, isZip) {
+    const tempDir = path.join(targetFolder, 'temp_extract');
+    if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir, { recursive: true });
+
+    console.log(`Extracting ${path.basename(archivePath)}...`);
+
+    try {
+        if (isZip) {
+            // Use PowerShell for zip on Windows
+            const cmd = `powershell -Command "$ProgressPreference = 'SilentlyContinue'; Expand-Archive -Path '${archivePath}' -DestinationPath '${tempDir}' -Force"`;
+            execSync(cmd);
+        } else {
+            // Use tar for tar.gz (Windows 10+ has tar)
+            // If tar is not available, this might fail on old Windows. Assuming Dev env has git bash or modern windows.
+            try {
+                execSync(`tar -xzf "${archivePath}" -C "${tempDir}"`);
+            } catch (e) {
+                console.log("tar failed, trying to use 7z if available or warn user.");
+                throw e;
+            }
+        }
+
+        // Find binary in kubo/ (it extracts to a 'kubo' folder usually)
+        const possiblePaths = [
+            path.join(tempDir, 'kubo', binaryName),
+            path.join(tempDir, binaryName)
+        ];
+
+        let src = possiblePaths.find(p => fs.existsSync(p));
+        if (src) {
+            const dest = path.join(targetFolder, binaryName);
+            // Remove existing if any
+            if (fs.existsSync(dest)) fs.unlinkSync(dest);
+            
+            fs.renameSync(src, dest);
+            
+            // Chmod +x for non-windows
+            if (!binaryName.endsWith('.exe')) {
+                fs.chmodSync(dest, 0o755);
+            }
+            console.log(`Installed to ${dest}`);
+        } else {
+            throw new Error(`Binary ${binaryName} not found in archive.`);
+        }
+
+    } finally {
+        // Cleanup temp
+        try {
+            if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
+            if (fs.existsSync(archivePath)) fs.unlinkSync(archivePath);
+        } catch (e) {
+            console.warn("Cleanup warning:", e.message);
+        }
+    }
 }
 
-const p = mapPlatform(PLATFORM);
-const a = mapArch(ARCH);
-const ext = p === 'windows' ? 'zip' : 'tar.gz';
-
-const filename = `kubo_${KUBO_VERSION}_${p}-${a}.${ext}`;
-const url = `https://dist.ipfs.tech/kubo/${KUBO_VERSION}/${filename}`;
-const dest = path.join(OUTPUT_DIR, filename);
-
-console.log(`Downloading Kubo ${KUBO_VERSION} for ${p}/${a}...`);
-console.log(`URL: ${url}`);
-
-const file = fs.createWriteStream(dest);
-https.get(url, (response) => {
-    if (response.statusCode !== 200) {
-        console.error(`Failed to download: ${response.statusCode}`);
-        process.exit(1);
+async function processTarget(target) {
+    const targetDir = path.join(BASE_OUTPUT_DIR, target.folder);
+    if (!fs.existsSync(targetDir)) {
+        fs.mkdirSync(targetDir, { recursive: true });
     }
 
-    response.pipe(file);
+    const filename = `kubo_${KUBO_VERSION}_${target.platform}-${target.arch}.${target.ext}`;
+    const url = `https://dist.ipfs.tech/kubo/${KUBO_VERSION}/${filename}`;
+    const dest = path.join(targetDir, filename);
 
-    file.on('finish', () => {
-        file.close(() => {
-            console.log('Download complete. Extracting...');
-            
-            try {
-                if (p === 'windows') {
-                    // 使用 PowerShell 解压
-                    // Wait a bit for file handle release?
-                    // But callback should be enough.
-                    const cmd = `powershell -Command "Expand-Archive -Path '${dest}' -DestinationPath '${OUTPUT_DIR}' -Force"`;
-                    execSync(cmd);
-                
-                // 移动文件: kubo/ipfs.exe -> ipfs.exe
-                const src = path.join(OUTPUT_DIR, 'kubo', 'ipfs.exe');
-                const target = path.join(OUTPUT_DIR, 'ipfs.exe');
-                if (fs.existsSync(src)) {
-                    fs.renameSync(src, target);
-                    console.log(`Moved ${src} to ${target}`);
-                } else {
-                    console.error("ipfs.exe not found in extracted folder");
-                }
-            } else {
-                // 使用 tar 解压
-                execSync(`tar -xzf "${dest}" -C "${OUTPUT_DIR}"`);
-                
-                // 移动文件
-                const src = path.join(OUTPUT_DIR, 'kubo', 'ipfs');
-                const target = path.join(OUTPUT_DIR, 'ipfs');
-                if (fs.existsSync(src)) {
-                    fs.renameSync(src, target);
-                    fs.chmodSync(target, 0o755); // 赋予执行权限
-                    console.log(`Moved ${src} to ${target}`);
-                }
-            }
+    console.log(`Processing ${target.platform}/${target.arch}...`);
+    
+    // Check if binary already exists to skip? (Optional, but good for speed)
+    // if (fs.existsSync(path.join(targetDir, target.binary))) {
+    //     console.log("Binary already exists, skipping download.");
+    //     return;
+    // }
 
-            // 清理
-            fs.unlinkSync(dest);
-            const kuboDir = path.join(OUTPUT_DIR, 'kubo');
-            if (fs.existsSync(kuboDir)) {
-                fs.rmSync(kuboDir, { recursive: true, force: true });
-            }
-            
-            console.log('Kubo setup complete!');
+    await downloadFile(url, dest);
+    extractAndMove(dest, targetDir, target.binary, target.ext === 'zip');
+}
 
+async function main() {
+    console.log("Starting multi-platform Kubo download...");
+    for (const target of targets) {
+        try {
+            await processTarget(target);
         } catch (err) {
-            console.error('Extraction failed:', err);
+            console.error(`Error processing ${target.platform}:`, err);
             process.exit(1);
         }
-    });
-});
-}).on('error', (err) => {
-    fs.unlink(dest, () => {});
-    console.error('Download error:', err.message);
-    process.exit(1);
-});
+    }
+    console.log("All Kubo binaries downloaded successfully!");
+}
+
+main();

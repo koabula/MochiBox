@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -24,7 +26,19 @@ func main() {
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatal(err)
 	}
+
+	// Setup File Logging
+	logFile, err := os.OpenFile(filepath.Join(dataDir, "backend.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
+	if err == nil {
+		log.SetOutput(io.MultiWriter(os.Stdout, logFile))
+	} else {
+		log.Printf("Failed to open log file: %v", err)
+	}
 	
+	log.Println("----------------------------------------")
+	log.Println("MochiBox Backend Starting...")
+	log.Printf("Data Directory: %s", dataDir)
+
 	// 2. Initialize Database
 	database, err := db.InitDB(filepath.Join(dataDir, "mochibox.db"))
 	if err != nil {
@@ -111,13 +125,36 @@ func main() {
 	}
 
 	server := api.NewServer(node, database, ipfsMgr)
+
+	// Watch Stdin for shutdown signal (watchdog)
+	go func() {
+		scanner := bufio.NewScanner(os.Stdin)
+		for scanner.Scan() {
+			if scanner.Text() == "shutdown" {
+				if server.ShutdownChan != nil {
+					server.ShutdownChan <- true
+					return
+				}
+			}
+		}
+		// If Stdin closed (parent died), trigger shutdown
+		if server.ShutdownChan != nil {
+			server.ShutdownChan <- true
+		}
+	}()
 	
 	// Handle graceful shutdown
 	go func() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-		<-c
-		log.Println("Shutting down...")
+		
+		select {
+		case <-c:
+			log.Println("Received signal, shutting down...")
+		case <-server.ShutdownChan:
+			log.Println("Received shutdown request (API/Stdin)...")
+		}
+
 		if ipfsMgr != nil {
 			ipfsMgr.Stop()
 		}

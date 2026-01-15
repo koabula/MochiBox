@@ -15,7 +15,20 @@ func (s *Server) registerSystemRoutes(rg *gin.RouterGroup) {
 		system.GET("/status", s.handleNodeStatus)
 		system.GET("/peers", s.handleListPeers)
 		system.POST("/connect", s.handleConnectPeer)
+		system.POST("/shutdown", s.handleShutdown)
 	}
+}
+
+func (s *Server) handleShutdown(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"status": "shutting_down"})
+	
+	go func() {
+		// Wait a bit for the response to be sent
+		time.Sleep(100 * time.Millisecond)
+		if s.ShutdownChan != nil {
+			s.ShutdownChan <- true
+		}
+	}()
 }
 
 func (s *Server) handleConnectPeer(c *gin.Context) {
