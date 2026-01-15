@@ -1,0 +1,18 @@
+{
+  "name": "mochibox-root",
+  "private": true,
+  "workspaces": [
+    "frontend",
+    "electron"
+  ],
+  "scripts": {
+    "dev": "concurrently \"npm run dev --prefix frontend\" \"cd backend && go run .\" \"wait-on tcp:5173 && npm start --prefix electron\"",
+    "build": "powershell -ExecutionPolicy Bypass -File build.ps1",
+    "preview": "cross-env NODE_ENV=production npm start --prefix electron"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "cross-env": "^7.0.3",
+    "wait-on": "^7.2.0"
+  }
+}

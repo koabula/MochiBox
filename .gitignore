@@ -1,0 +1,34 @@
+# Trae IDE
+.trae/
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# Go
+backend/mochibox-core.exe
+backend/mochibox-core.exe~
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Frontend
+frontend/dist/
+frontend/.env.local
+
+# Electron
+electron/dist/
+electron/out/
+electron/resources/bin/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
