@@ -29,6 +29,9 @@ func (s *Server) registerFileRoutes(db *gorm.DB) {
 		})
         api.POST("/:id/download", s.handleDownloadToDisk)
         api.POST("/download/shared", s.handleDownloadShared)
+		api.POST("/sync", func(c *gin.Context) {
+			s.handleSyncFiles(c, db)
+		})
 	}
 }
 
@@ -220,4 +223,43 @@ func (s *Server) handleDeleteFile(c *gin.Context, database *gorm.DB) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "deleted"})
+}
+
+func (s *Server) handleSyncFiles(c *gin.Context, database *gorm.DB) {
+	pins, err := s.Node.ListPins(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list pins: " + err.Error()})
+		return
+	}
+
+	addedCount := 0
+	for _, cid := range pins {
+		var count int64
+		database.Model(&db.File{}).Where("cid = ?", cid).Count(&count)
+		if count == 0 {
+			// New file found
+			newFile := db.File{
+				CID:       cid,
+				Name:      "Imported-" + cid[:8], // Generic name
+				CreatedAt: time.Now(),
+				MimeType:  "application/octet-stream",
+			}
+
+			// Try to get size
+			size, err := s.Node.GetFileSize(c.Request.Context(), cid)
+			if err == nil {
+				newFile.Size = size
+			}
+
+			if err := database.Create(&newFile).Error; err == nil {
+				addedCount++
+			}
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":     "synced",
+		"total_pins": len(pins),
+		"added":      addedCount,
+	})
 }

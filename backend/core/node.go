@@ -136,6 +136,39 @@ func (n *MochiNode) Pin(ctx context.Context, cidStr string) error {
 	return nil
 }
 
+func (n *MochiNode) ListPins(ctx context.Context) ([]string, error) {
+	// List all pins
+	pins := make(chan iface.Pin)
+	errCh := make(chan error, 1)
+
+	go func() {
+		// Prevent panic if channel is already closed by Ls
+		defer func() {
+			recover()
+		}()
+		defer close(pins)
+
+		if err := n.IPFS.Pin().Ls(ctx, pins); err != nil {
+			errCh <- err
+		}
+		close(errCh)
+	}()
+
+	var cidList []string
+	for p := range pins {
+		// Filter for recursive and direct pins (user explicitly pinned)
+		if p.Type() == "recursive" || p.Type() == "direct" {
+			cidList = append(cidList, p.Path().RootCid().String())
+		}
+	}
+
+	if err := <-errCh; err != nil {
+		return nil, fmt.Errorf("failed to list pins: %w", err)
+	}
+
+	return cidList, nil
+}
+
 func (n *MochiNode) GetFile(ctx context.Context, cidStr string) (io.Reader, error) {
 	// Boxo path handling
 	cidPath, err := path.NewPath("/ipfs/" + cidStr)

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useFileStore } from '@/stores/files';
 import { useSettingsStore } from '@/stores/settings';
@@ -54,6 +54,23 @@ onMounted(() => {
   settingsStore.fetchSettings();
 });
 
+// Watch tab change to auto-refresh/sync
+watch(currentTab, async (newTab) => {
+    if (newTab === 'files') {
+        // 1. Fetch DB first to show local changes (like new Pins)
+        await fileStore.fetchFiles();
+        
+        // 2. Auto-sync if online (Background)
+        // We check networkStore status. 
+        // Note: networkStore.status might be initial default, but it's reactive.
+        // Better to check if we have a peerID or online flag.
+        if (networkStore.status.online || networkStore.status.peer_id) {
+             console.log("Auto-syncing files from node...");
+             fileStore.syncFiles().catch(e => console.error("Auto-sync failed", e));
+        }
+    }
+});
+
 const handleUpload = async (data: any) => {
     try {
         await fileStore.uploadFile(data.file);
@@ -68,6 +85,15 @@ const handleDelete = async (id: number) => {
     if (confirm('Are you sure you want to delete this file?')) {
         await fileStore.deleteFile(id);
         toastStore.success('File deleted');
+    }
+};
+
+const handleSync = async () => {
+    try {
+        await fileStore.syncFiles();
+        toastStore.success('Files synced with IPFS node');
+    } catch (e) {
+        toastStore.error('Sync failed');
     }
 };
 
@@ -307,10 +333,12 @@ const handleUpdateDataDir = async () => {
             <FileTable 
                 v-else 
                 :files="files" 
+                :show-sync="true"
                 @preview="handlePreview"
                 @share="handleShare"
                 @download="handleDownload"
                 @delete="handleDelete"
+                @sync="handleSync"
             />
         </div>
 

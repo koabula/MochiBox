@@ -179,7 +179,7 @@ const handlePin = async (file: any) => {
     try {
         await api.post('/shared/pin', { cid: file.cid });
         taskStore.completeTask(taskId);
-        toastStore.success(`Successfully pinned ${filename}`);
+        toastStore.success(`${filename} pinned and added to My Files`);
     } catch (e: any) {
         console.error(e);
         taskStore.failTask(taskId, e.message || 'Pin failed');

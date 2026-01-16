@@ -1,13 +1,14 @@
 <script setup lang="ts">
-import { FileText, Download, Trash2, Eye, Share2, Pin } from 'lucide-vue-next';
+import { FileText, Download, Trash2, Eye, Share2, Pin, RefreshCcw } from 'lucide-vue-next';
 
 const props = defineProps<{
   files: any[],
   showClearHistory?: boolean,
-  showPin?: boolean
+  showPin?: boolean,
+  showSync?: boolean
 }>();
 
-const emit = defineEmits(['preview', 'delete', 'share', 'download', 'clear-history', 'pin']);
+const emit = defineEmits(['preview', 'delete', 'share', 'download', 'clear-history', 'pin', 'sync']);
 
 const formatSize = (bytes: number) => {
   if (bytes === 0) return '0 B';
@@ -33,6 +34,14 @@ const formatDate = (dateStr: string) => {
           <th class="px-6 py-4">Date</th>
           <th class="px-6 py-4 text-right whitespace-nowrap flex items-center justify-end gap-2">
             Actions
+            <button 
+                v-if="showSync"
+                @click="$emit('sync')"
+                class="p-1.5 rounded-lg text-nord-3 hover:text-nord-10 hover:bg-nord-5 dark:hover:bg-nord-3 transition-colors"
+                title="Sync from Node"
+            >
+                <RefreshCcw class="w-4 h-4" />
+            </button>
             <button 
                 v-if="showClearHistory && files.length > 0"
                 @click="$emit('clear-history')"

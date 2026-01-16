@@ -39,6 +39,38 @@ func (s *Server) handlePinShared(c *gin.Context) {
 		return
 	}
 
+	// Add to My Files (DB) if not exists
+	var count int64
+	s.DB.Model(&db.File{}).Where("cid = ?", req.CID).Count(&count)
+	if count == 0 {
+		newFile := db.File{
+			CID:       req.CID,
+			CreatedAt: time.Now(),
+			MimeType:  "application/octet-stream",
+		}
+
+		// Try to find name from Shared History
+		var sharedFile db.SharedFile
+		if err := s.DB.Where("cid = ?", req.CID).First(&sharedFile).Error; err == nil {
+			newFile.Name = sharedFile.Name
+		}
+
+		// If still no name, use default
+		if newFile.Name == "" {
+			newFile.Name = "Pinned-" + req.CID[:8]
+		}
+
+		// Get Size
+		size, err := s.Node.GetFileSize(c.Request.Context(), req.CID)
+		if err == nil {
+			newFile.Size = size
+		}
+
+		if err := s.DB.Create(&newFile).Error; err != nil {
+			fmt.Printf("Warning: Failed to add pinned file to DB: %v\n", err)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{"status": "pinned", "cid": req.CID})
 }
 

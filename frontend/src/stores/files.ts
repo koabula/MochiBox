@@ -69,5 +69,18 @@ export const useFileStore = defineStore('files', () => {
       }
   }
 
-  return { files, loading, uploading, fetchFiles, uploadFile, deleteFile };
+  async function syncFiles() {
+    loading.value = true;
+    try {
+      await api.post('/files/sync');
+      await fetchFiles();
+    } catch (e) {
+      console.error(e);
+      throw e;
+    } finally {
+      loading.value = false;
+    }
+  }
+
+  return { files, loading, uploading, fetchFiles, uploadFile, deleteFile, syncFiles };
 });
