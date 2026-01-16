@@ -9,7 +9,7 @@ import { storeToRefs } from 'pinia';
 import Sidebar from '@/components/layout/Sidebar.vue';
 import FileTable from '@/components/file/FileTable.vue';
 import UploadModal from '@/components/file/UploadModal.vue';
-import SharedFileModal from '@/components/file/SharedFileModal.vue';
+import SharedPage from '@/components/file/SharedPage.vue';
 import ShareExportModal from '@/components/file/ShareExportModal.vue';
 import TaskList from '@/components/task/TaskList.vue';
 import NetworkPage from '@/components/network/NetworkPage.vue';
@@ -30,11 +30,8 @@ const { files, loading, uploading } = storeToRefs(fileStore);
 
 const currentTab = ref('files');
 const showUploadModal = ref(false);
-const showSharedModal = ref(false);
 const showShareExportModal = ref(false);
-const sharedModalData = ref<any>(null);
 const shareExportFile = ref<any>(null);
-const sharedInput = ref('');
 const isDark = ref(localStorage.getItem('theme') === 'dark');
 
 const toggleTheme = () => {
@@ -242,34 +239,6 @@ const handleDownload = async (file: any) => {
     }
 };
 
-const handleImportShared = () => {
-    try {
-        let data: any;
-        try {
-            data = JSON.parse(sharedInput.value);
-        } catch {
-             // Maybe it's just a CID or URL
-             // If input looks like a CID (alphanumeric, len > 40ish)
-             if (sharedInput.value.length > 40 && !sharedInput.value.includes(' ')) {
-                 data = { cid: sharedInput.value };
-             } else if (sharedInput.value.startsWith('http')) {
-                 window.open(sharedInput.value, '_blank');
-                 return;
-             } else {
-                 throw new Error("Invalid format");
-             }
-        }
-
-        if (!data.cid) throw new Error("Invalid share data: missing CID");
-        
-        sharedModalData.value = data;
-        showSharedModal.value = true;
-        
-    } catch (e) {
-         toastStore.error('Invalid share format. Please paste the JSON object or CID.');
-    }
-};
-
 const handleShare = (file: any) => {
     if (!file.cid) {
         toastStore.error("Error: File CID is missing. Please re-upload this file.");
@@ -346,28 +315,8 @@ const handleUpdateDataDir = async () => {
         </div>
 
         <!-- Shared Tab -->
-        <div v-else-if="currentTab === 'shared'" class="h-full flex flex-col items-center justify-center gap-6 p-8 animate-fade-in">
-             <div class="w-full max-w-2xl bg-nord-6 dark:bg-nord-1 p-8 rounded-2xl border border-nord-4 dark:border-nord-2 shadow-sm space-y-6">
-                 <div class="text-center space-y-2">
-                     <Download class="w-12 h-12 mx-auto text-nord-10 dark:text-nord-8" />
-                     <h3 class="text-xl font-bold text-nord-1 dark:text-nord-6">Import Shared File</h3>
-                     <p class="text-nord-3 dark:text-nord-4">Paste the CID or Shared JSON below to preview/download</p>
-                 </div>
-                 
-                 <textarea 
-                    v-model="sharedInput"
-                    placeholder='Paste CID or JSON here...'
-                    class="w-full h-32 px-4 py-3 rounded-xl border border-nord-4 dark:border-nord-3 bg-white dark:bg-nord-0 text-nord-1 dark:text-nord-6 focus:ring-2 focus:ring-nord-10 outline-none transition-all font-mono text-sm resize-none"
-                 ></textarea>
-                 
-                 <button 
-                    @click="handleImportShared"
-                    :disabled="!sharedInput"
-                    class="w-full py-3 bg-nord-10 hover:bg-nord-9 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-colors shadow-lg shadow-nord-10/20"
-                 >
-                    View File
-                 </button>
-             </div>
+        <div v-else-if="currentTab === 'shared'" class="h-full animate-fade-in">
+             <SharedPage />
         </div>
 
         <!-- Tasks Tab -->
@@ -522,12 +471,6 @@ const handleUpdateDataDir = async () => {
         @upload="handleUpload"
     />
 
-    <SharedFileModal
-        :is-open="showSharedModal"
-        :shared-data="sharedModalData"
-        @close="showSharedModal = false"
-    />
-    
     <ShareExportModal
         :is-open="showShareExportModal"
         :file="shareExportFile"

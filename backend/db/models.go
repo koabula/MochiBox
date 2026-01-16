@@ -16,6 +16,15 @@ type File struct {
 	CreatedAt      time.Time      `json:"created_at"`
 }
 
+type SharedFile struct {
+	ID        uint      `gorm:"primaryKey" json:"id"`
+	CID       string    `gorm:"column:cid" json:"cid"`
+	Name      string    `json:"name"`
+	Size      int64     `json:"size"`
+	MimeType  string    `json:"mime_type"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Settings struct {
 	ID              uint   `gorm:"primaryKey" json:"id"`
 	DownloadPath    string `json:"download_path"`
@@ -31,7 +40,7 @@ func InitDB(path string) (*gorm.DB, error) {
 		return nil, err
 	}
 
-	err = db.AutoMigrate(&File{}, &Settings{})
+	err = db.AutoMigrate(&File{}, &Settings{}, &SharedFile{})
 	if err != nil {
 		return nil, err
 	}

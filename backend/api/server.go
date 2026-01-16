@@ -53,8 +53,9 @@ func (s *Server) RegisterRoutes() {
 	{
 		// api.GET("/files", s.handleListFiles) // Moved to registerFileRoutes
         s.registerGatewayRoutes(api)
-        s.registerConfigRoutes(api)
-        s.registerSystemRoutes(api)
+		s.registerConfigRoutes(api)
+		s.registerSystemRoutes(api)
+		s.registerSharedRoutes(api)
 	}
     
     s.registerFileRoutes(s.DB)

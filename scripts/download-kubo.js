@@ -105,11 +105,14 @@ async function processTarget(target) {
 
     console.log(`Processing ${target.platform}/${target.arch}...`);
     
-    // Check if binary already exists to skip? (Optional, but good for speed)
-    // if (fs.existsSync(path.join(targetDir, target.binary))) {
-    //     console.log("Binary already exists, skipping download.");
-    //     return;
-    // }
+    // Check if binary already exists
+    const binaryPath = path.join(targetDir, target.binary);
+    const force = process.argv.includes('--force');
+
+    if (fs.existsSync(binaryPath) && !force) {
+        console.log(`Binary already exists at ${binaryPath}, skipping download. Use --force to overwrite.`);
+        return;
+    }
 
     await downloadFile(url, dest);
     extractAndMove(dest, targetDir, target.binary, target.ext === 'zip');

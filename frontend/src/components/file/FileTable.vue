@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { FileText, Download, Trash2, Eye, Share2 } from 'lucide-vue-next';
+import { FileText, Download, Trash2, Eye, Share2, Pin } from 'lucide-vue-next';
 
 const props = defineProps<{
-  files: any[]
+  files: any[],
+  showClearHistory?: boolean,
+  showPin?: boolean
 }>();
 
-const emit = defineEmits(['preview', 'delete', 'share', 'download']);
+const emit = defineEmits(['preview', 'delete', 'share', 'download', 'clear-history', 'pin']);
 
 const formatSize = (bytes: number) => {
   if (bytes === 0) return '0 B';
@@ -29,7 +31,17 @@ const formatDate = (dateStr: string) => {
           <th class="px-6 py-4">Size</th>
           <th class="px-6 py-4">Type</th>
           <th class="px-6 py-4">Date</th>
-          <th class="px-6 py-4 text-right whitespace-nowrap">Actions</th>
+          <th class="px-6 py-4 text-right whitespace-nowrap flex items-center justify-end gap-2">
+            Actions
+            <button 
+                v-if="showClearHistory && files.length > 0"
+                @click="$emit('clear-history')"
+                class="p-1.5 rounded-lg text-nord-3 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-900/10 transition-colors"
+                title="Clear All History"
+            >
+                <Trash2 class="w-4 h-4" />
+            </button>
+          </th>
         </tr>
       </thead>
       <tbody class="divide-y divide-nord-4 dark:divide-nord-3">
@@ -52,6 +64,9 @@ const formatDate = (dateStr: string) => {
             </button>
              <button @click="$emit('share', file)" class="p-2 text-nord-3 hover:text-nord-10 dark:text-nord-4 dark:hover:text-nord-8 transition-colors" title="Share">
               <Share2 class="w-4 h-4" />
+            </button>
+             <button v-if="showPin" @click="$emit('pin', file)" class="p-2 text-nord-3 hover:text-nord-10 dark:text-nord-4 dark:hover:text-nord-8 transition-colors" title="Pin to Local Node">
+              <Pin class="w-4 h-4" />
             </button>
             <button @click="$emit('delete', file.id)" class="p-2 text-nord-3 hover:text-red-500 dark:text-nord-4 dark:hover:text-red-400 transition-colors" title="Delete">
               <Trash2 class="w-4 h-4" />

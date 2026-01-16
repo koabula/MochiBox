@@ -120,6 +120,22 @@ func (n *MochiNode) Unpin(ctx context.Context, cidStr string) error {
 	return nil
 }
 
+// Pin recursively pins the given CID
+func (n *MochiNode) Pin(ctx context.Context, cidStr string) error {
+	cidPath, err := path.NewPath("/ipfs/" + cidStr)
+	if err != nil {
+		return fmt.Errorf("invalid CID: %w", err)
+	}
+
+	// Add pin (recursive by default)
+	err = n.IPFS.Pin().Add(ctx, cidPath)
+	if err != nil {
+		return fmt.Errorf("failed to pin CID: %w", err)
+	}
+
+	return nil
+}
+
 func (n *MochiNode) GetFile(ctx context.Context, cidStr string) (io.Reader, error) {
 	// Boxo path handling
 	cidPath, err := path.NewPath("/ipfs/" + cidStr)
@@ -137,6 +153,25 @@ func (n *MochiNode) GetFile(ctx context.Context, cidStr string) (io.Reader, erro
 	}
 	
 	return nil, fmt.Errorf("node is not a file")
+}
+
+func (n *MochiNode) GetFileSize(ctx context.Context, cidStr string) (int64, error) {
+	// Boxo path handling
+	cidPath, err := path.NewPath("/ipfs/" + cidStr)
+	if err != nil {
+		return 0, err
+	}
+	
+	node, err := n.IPFS.Unixfs().Get(ctx, cidPath)
+	if err != nil {
+		return 0, err
+	}
+	
+	if f, ok := node.(files.File); ok {
+		return f.Size()
+	}
+	
+	return 0, fmt.Errorf("node is not a file")
 }
 
 func (n *MochiNode) ListBlocks(ctx context.Context) ([]string, error) {
