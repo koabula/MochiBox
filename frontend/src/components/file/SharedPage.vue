@@ -5,6 +5,7 @@ import { useSharedStore } from '@/stores/shared';
 import { useToastStore } from '@/stores/toast';
 import { useTaskStore } from '@/stores/tasks';
 import { useSettingsStore } from '@/stores/settings';
+import { useAccountStore } from '@/stores/account';
 import { storeToRefs } from 'pinia';
 import FileTable from '@/components/file/FileTable.vue';
 import SharedFileModal from '@/components/file/SharedFileModal.vue';
@@ -14,6 +15,7 @@ const sharedStore = useSharedStore();
 const toastStore = useToastStore();
 const taskStore = useTaskStore();
 const settingsStore = useSettingsStore();
+const accountStore = useAccountStore();
 
 const { history, loading } = storeToRefs(sharedStore);
 const sharedInput = ref('');
@@ -26,55 +28,178 @@ onMounted(() => {
 
 const handleImportShared = async () => {
     try {
+        const input = sharedInput.value.trim();
         let cid = '';
         let name = '';
+        let size = 0;
+        let mimeType = '';
+        let encryptionType = 'public';
+        let encryptionMeta = '';
+        let embeddedPassword = '';
 
-        try {
-            const data = JSON.parse(sharedInput.value);
-            if (data.cid) {
-                cid = data.cid;
-                name = data.name || '';
-            } else {
-                throw new Error("Invalid JSON");
+        // 1. Try Parse Mochi Link (mochi://BASE64)
+        if (input.startsWith('mochi://')) {
+            try {
+                const base64Str = input.replace('mochi://', '');
+                
+                // UTF-8 Safe Base64 Decoding
+                const binaryStr = atob(base64Str);
+                const bytes = new Uint8Array(binaryStr.length);
+                for (let i = 0; i < binaryStr.length; i++) {
+                    bytes[i] = binaryStr.charCodeAt(i);
+                }
+                const decoder = new TextDecoder();
+                const jsonStr = decoder.decode(bytes);
+                
+                const payload = JSON.parse(jsonStr);
+                
+                cid = payload.c;
+                name = payload.n || '';
+                size = payload.s || 0;
+                mimeType = payload.m || '';
+                
+                // Map short type to full type
+                if (payload.t === 'pwd') encryptionType = 'password';
+                else if (payload.t === 'priv') encryptionType = 'private';
+                else encryptionType = 'public';
+                
+                // Extract Meta
+                if (payload.p) {
+                    if (encryptionType === 'password') {
+                        encryptionMeta = payload.p.salt;
+                        embeddedPassword = payload.p.pw || '';
+                    }
+                    else if (encryptionType === 'private') encryptionMeta = payload.p.ek;
+                }
+            } catch (e) {
+                throw new Error("Invalid Mochi Link format");
             }
-        } catch {
-            // Treat as raw CID/String
-            if (sharedInput.value.length > 5 && !sharedInput.value.includes(' ')) {
-                cid = sharedInput.value;
-            } else if (sharedInput.value.startsWith('http')) {
-                 window.open(sharedInput.value, '_blank');
-                 return;
-            } else {
-                 throw new Error("Invalid format");
+        } else {
+            // 2. Try JSON Parse
+            try {
+                const data = JSON.parse(input);
+                if (data.cid) {
+                    cid = data.cid;
+                    name = data.name || '';
+                } else {
+                    throw new Error("Invalid JSON");
+                }
+            } catch {
+                // 3. Treat as raw CID/String
+                if (input.length > 5 && !input.includes(' ')) {
+                    cid = input;
+                } else if (input.startsWith('http')) {
+                     window.open(input, '_blank');
+                     return;
+                } else {
+                     throw new Error("Invalid format");
+                }
             }
         }
 
         if (!cid) throw new Error("Invalid share data: missing CID");
-        
-        // Add to history
-        const file = await sharedStore.addToHistory(cid, name);
-        toastStore.success('Added to history');
-        
-        // Open Modal
-        sharedModalData.value = file;
+
+        if (!name) {
+            name = `Shared-${cid.slice(0, 8)}`;
+        }
+
+        const modalFile: any = {
+            cid,
+            name,
+            size,
+            mime_type: mimeType,
+            encryption_type: encryptionType,
+            encryption_meta: encryptionMeta
+        };
+        if (embeddedPassword) {
+            modalFile.embedded_password = embeddedPassword;
+        }
+
+        sharedModalData.value = modalFile;
         showSharedModal.value = true;
         
-        // Clear input
         sharedInput.value = '';
+
+        sharedStore.addToHistory(cid, name, size, mimeType, encryptionType, encryptionMeta)
+            .then((saved) => {
+                saved.encryption_type = encryptionType;
+                saved.encryption_meta = encryptionMeta;
+                if (embeddedPassword) saved.embedded_password = embeddedPassword;
+                if (sharedModalData.value?.cid === cid) {
+                    sharedModalData.value = { ...sharedModalData.value, ...saved };
+                }
+                toastStore.success('Added to history');
+            })
+            .catch((e: any) => {
+                toastStore.error(e?.response?.data?.error || e?.message || 'Failed to add to history');
+            });
         
     } catch (e: any) {
          toastStore.error(e.message || 'Invalid share format');
     }
 };
 
-const handlePreview = (file: any) => {
-    let url = `http://localhost:3666/api/preview/${file.cid}`;
+const handlePreview = (file: any, password?: string) => {
+    const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
+    let url = `${baseUrl}/preview/${file.cid}`;
+    const params = new URLSearchParams();
+
+    // Append encryption params if known
+    if (file.encryption_type === 'password') {
+        let pw = password || '';
+        if (file.embedded_password) {
+            pw = file.embedded_password;
+        }
+        
+        if (!pw) {
+            sharedModalData.value = file;
+            showSharedModal.value = true;
+            return;
+        }
+        params.append('password', pw);
+        
+        // Stateless fallback
+        if (file.encryption_meta) {
+            params.append('meta', file.encryption_meta);
+        }
+        
+    } else if (file.encryption_type === 'private') {
+        if (accountStore.locked) {
+            toastStore.error("Please unlock your account first");
+            return;
+        }
+        // Stateless fallback
+        if (file.encryption_meta) {
+            params.append('meta', file.encryption_meta);
+        }
+    }
+    
+    if (params.toString()) {
+        url += `?${params.toString()}`;
+    }
+    
     window.open(url, '_blank');
 };
 
-const handleDownload = async (file: any) => {
+const handleDownload = async (file: any, password?: string) => {
     const filename = file.name || file.cid;
     
+    // Resolve password first
+    let pw = password || '';
+    if (file.encryption_type === 'password') {
+        if (file.embedded_password) {
+            pw = file.embedded_password;
+        }
+        if (!pw) {
+            sharedModalData.value = file;
+            showSharedModal.value = true;
+            return;
+        }
+    } else if (file.encryption_type === 'private' && accountStore.locked) {
+         toastStore.error("Please unlock your account first");
+         return;
+    }
+
     // Check settings for "Always ask" or missing path
     if (settingsStore.askPath || !settingsStore.downloadPath) {
         try {
@@ -91,7 +216,15 @@ const handleDownload = async (file: any) => {
                 try {
                     const writable = await handle.createWritable();
                     const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
-                    const url = `${baseUrl}/preview/${file.cid}?download=true`;
+                    let url = `${baseUrl}/preview/${file.cid}?download=true`;
+                    
+                    const params = new URLSearchParams();
+                    if (pw) params.append('password', pw);
+                    if (file.encryption_meta) params.append('meta', file.encryption_meta);
+                    
+                    if (params.toString()) {
+                        url += `&${params.toString()}`;
+                    }
                     
                     const response = await fetch(url);
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -121,16 +254,20 @@ const handleDownload = async (file: any) => {
         toastStore.success(`Download started for ${filename}`);
         
         try {
+            // For now, let's fallback to Blob Download for encrypted files to ensure password support works
+            if (file.encryption_type === 'password' || file.encryption_type === 'private') {
+                 throw new Error("Encrypted files fallback to browser download");
+            }
+
             await api.post('/files/download/shared', {
                 cid: file.cid,
                 name: filename,
             });
             taskStore.completeTask(taskId);
         } catch (e: any) {
-             taskStore.failTask(taskId, e.message || 'Download failed');
-             toastStore.error(`Download failed: ${e.message}`);
+             // Fallthrough to blob download
         }
-        return;
+        // return; // Don't return, fallthrough
     }
 
     // Fallback: Browser Blob Download
@@ -138,7 +275,16 @@ const handleDownload = async (file: any) => {
     toastStore.success('Download started');
     
     try {
-        const url = `/preview/${file.cid}?download=true`;
+        let url = `/preview/${file.cid}?download=true`;
+        
+        const params = new URLSearchParams();
+        if (pw) params.append('password', pw);
+        if (file.encryption_meta) params.append('meta', file.encryption_meta);
+        
+        if (params.toString()) {
+            url += `&${params.toString()}`;
+        }
+
         const response = await api.get(url, {
             responseType: 'blob',
             onDownloadProgress: (progressEvent) => {
@@ -177,7 +323,11 @@ const handlePin = async (file: any) => {
     toastStore.success(`Pinning started for ${filename}`);
     
     try {
-        await api.post('/shared/pin', { cid: file.cid });
+        await api.post('/shared/pin', { 
+            cid: file.cid,
+            encryption_type: file.encryption_type,
+            encryption_meta: file.encryption_meta
+        });
         taskStore.completeTask(taskId);
         toastStore.success(`${filename} pinned and added to My Files`);
     } catch (e: any) {
@@ -201,16 +351,25 @@ const handleClearHistory = async () => {
     }
 };
 
-const onModalPreview = () => {
+const onModalPreview = (password?: string) => {
     if (sharedModalData.value) {
-        handlePreview(sharedModalData.value);
+        handlePreview(sharedModalData.value, password);
     }
 };
 
-const onModalDownload = () => {
+const onModalDownload = (password?: string) => {
     if (sharedModalData.value) {
-        handleDownload(sharedModalData.value);
-        showSharedModal.value = false;
+        handleDownload(sharedModalData.value, password);
+        // Only close if we are not prompting for password inside?
+        // Wait, handleDownload might re-open modal if password missing.
+        // But if we pass password, it should succeed or fail.
+        // Let's close modal only if we have password or not password type.
+        
+        // Actually, handleDownload is async.
+        // If password provided, we can close modal.
+        if (sharedModalData.value.encryption_type !== 'password' || password || sharedModalData.value.embedded_password) {
+             showSharedModal.value = false;
+        }
     }
 };
 

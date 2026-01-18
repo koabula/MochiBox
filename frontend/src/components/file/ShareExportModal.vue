@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { Copy, X, Shield } from 'lucide-vue-next';
+import { Copy, X, Shield, Link } from 'lucide-vue-next';
 import { useToastStore } from '@/stores/toast';
+import { ref } from 'vue';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -9,21 +10,65 @@ const props = defineProps<{
 
 const emit = defineEmits(['close']);
 const toast = useToastStore();
+const includePassword = ref(false);
+const passwordInput = ref('');
+
+import { watch } from 'vue';
+watch(() => props.isOpen, (newVal) => {
+    if (newVal) {
+        includePassword.value = false;
+        passwordInput.value = '';
+    }
+});
 
 const handleCopy = async () => {
     if (!props.file) return;
 
-    let shareData: any = {
-        cid: props.file.cid,
-        name: props.file.name,
-        size: props.file.size,
+    // Construct Mochi Link Payload
+    const payload: any = {
+        v: 1,
+        c: props.file.cid,
+        n: props.file.name,
+        s: props.file.size,
+        t: props.file.encryption_type === 'password' ? 'pwd' : 
+           props.file.encryption_type === 'private' ? 'priv' : 'pub'
     };
+    if (props.file.mime_type) {
+        payload.m = props.file.mime_type;
+    }
+    
+    if (props.file.encryption_meta) {
+        payload.p = {};
+        if (payload.t === 'pwd') {
+            payload.p.salt = props.file.encryption_meta;
+            if (includePassword.value && passwordInput.value) {
+                // Warning: Sending password in plain text inside the link
+                // Ideally this should be obfuscated or just raw
+                payload.p.pw = passwordInput.value;
+            }
+        }
+        if (payload.t === 'priv') payload.p.ek = props.file.encryption_meta;
+    }
     
     try {
-        await navigator.clipboard.writeText(JSON.stringify(shareData, null, 2));
-        toast.success('Share info copied to clipboard!');
+        const jsonStr = JSON.stringify(payload);
+        // UTF-8 Safe Base64 Encoding
+        const encoder = new TextEncoder();
+        const data = encoder.encode(jsonStr);
+        // Convert Uint8Array to binary string
+        let binary = '';
+        const len = data.byteLength;
+        for (let i = 0; i < len; i++) {
+            binary += String.fromCharCode(data[i]);
+        }
+        const base64Str = btoa(binary);
+        const shareLink = `mochi://${base64Str}`;
+        
+        await navigator.clipboard.writeText(shareLink);
+        toast.success('Mochi Link copied to clipboard!');
         emit('close');
     } catch (e) {
+        console.error(e);
         toast.error('Failed to copy');
     }
 };
@@ -50,6 +95,18 @@ const close = () => {
           <div class="p-4 bg-nord-6 dark:bg-nord-2 rounded-xl">
               <h4 class="font-bold text-nord-1 dark:text-nord-6 truncate">{{ file.name }}</h4>
               <p class="text-xs font-mono text-nord-3 dark:text-nord-4 mt-1">{{ file.cid }}</p>
+          </div>
+
+          <div v-if="file.encryption_type === 'password'" class="p-4 border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/10 rounded-xl space-y-3">
+              <div class="flex items-center gap-2">
+                  <input type="checkbox" id="includePw" v-model="includePassword" class="w-4 h-4 text-amber-500 rounded focus:ring-amber-500" />
+                  <label for="includePw" class="text-sm font-bold text-amber-800 dark:text-amber-500 select-none">Include Password in Link</label>
+              </div>
+              <p class="text-xs text-amber-700 dark:text-amber-600">Anyone with this link will be able to decrypt the file without entering a password.</p>
+              
+              <div v-if="includePassword" class="animate-fade-in">
+                  <input v-model="passwordInput" type="password" placeholder="Enter File Password to Include" class="w-full px-3 py-2 rounded-lg border border-amber-300 dark:border-amber-800 bg-white dark:bg-nord-0 text-sm focus:ring-2 focus:ring-amber-500 outline-none" />
+              </div>
           </div>
 
           <button 

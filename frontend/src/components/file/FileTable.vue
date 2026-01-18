@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { FileText, Download, Trash2, Eye, Share2, Pin, RefreshCcw } from 'lucide-vue-next';
+import { FileText, Download, Trash2, Eye, Share2, Pin, RefreshCcw, Lock, Globe, UserCheck } from 'lucide-vue-next';
 
 const props = defineProps<{
   files: any[],
@@ -11,7 +11,7 @@ const props = defineProps<{
 const emit = defineEmits(['preview', 'delete', 'share', 'download', 'clear-history', 'pin', 'sync']);
 
 const formatSize = (bytes: number) => {
-  if (bytes === 0) return '0 B';
+  if (!bytes || bytes === 0) return 'Unknown';
   const k = 1024;
   const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -30,6 +30,7 @@ const formatDate = (dateStr: string) => {
         <tr>
           <th class="px-6 py-4">Name</th>
           <th class="px-6 py-4">Size</th>
+          <th class="px-6 py-4">Security</th>
           <th class="px-6 py-4">Type</th>
           <th class="px-6 py-4">Date</th>
           <th class="px-6 py-4 text-right whitespace-nowrap flex items-center justify-end gap-2">
@@ -62,7 +63,20 @@ const formatDate = (dateStr: string) => {
             {{ file.name }}
           </td>
           <td class="px-6 py-4 text-nord-3 dark:text-nord-4">{{ formatSize(file.size) }}</td>
-          <td class="px-6 py-4 text-nord-3 dark:text-nord-4">{{ file.mime_type }}</td>
+          <td class="px-6 py-4">
+              <div class="flex items-center gap-2">
+                  <div v-if="file.encryption_type === 'password'" class="flex items-center gap-1.5 px-2 py-1 bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-500 rounded text-xs font-bold uppercase">
+                      <Lock class="w-3 h-3" /> Password
+                  </div>
+                  <div v-else-if="file.encryption_type === 'private'" class="flex items-center gap-1.5 px-2 py-1 bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-500 rounded text-xs font-bold uppercase">
+                      <UserCheck class="w-3 h-3" /> Private
+                  </div>
+                  <div v-else class="flex items-center gap-1.5 px-2 py-1 bg-nord-4 dark:bg-nord-3 text-nord-2 dark:text-nord-4 rounded text-xs font-bold uppercase">
+                      <Globe class="w-3 h-3" /> Public
+                  </div>
+              </div>
+          </td>
+          <td class="px-6 py-4 text-nord-3 dark:text-nord-4 truncate max-w-[150px]" :title="file.mime_type">{{ file.mime_type }}</td>
           <td class="px-6 py-4 text-nord-3 dark:text-nord-4">{{ formatDate(file.created_at) }}</td>
           <td class="px-6 py-4 text-right space-x-2 whitespace-nowrap">
              <button @click="$emit('preview', file)" class="p-2 text-nord-3 hover:text-nord-10 dark:text-nord-4 dark:hover:text-nord-8 transition-colors" title="Preview">

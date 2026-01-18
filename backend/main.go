@@ -14,6 +14,7 @@ import (
 
 	"mochibox-core/api"
 	"mochibox-core/core"
+	"mochibox-core/crypto"
 	"mochibox-core/db"
 )
 
@@ -62,6 +63,19 @@ func main() {
 
 	var settings db.Settings
 	database.First(&settings)
+
+	// Account Manager
+	accountMgr := core.NewAccountManager(database, dataDir)
+	
+	// Try Auto-Unlock
+	if lockData, err := crypto.LoadAuthLock(dataDir); err == nil {
+		log.Println("Found auto-unlock data, attempting login...")
+		if err := accountMgr.Unlock(string(lockData)); err == nil {
+			log.Println("Auto-login successful")
+		} else {
+			log.Printf("Auto-login failed: %v", err)
+		}
+	}
 
 	// 3. Managed IPFS Node
 	var ipfsMgr *core.IpfsManager
@@ -139,7 +153,7 @@ func main() {
 		port = "3666"
 	}
 
-	server := api.NewServer(node, database, ipfsMgr)
+	server := api.NewServer(node, database, ipfsMgr, accountMgr)
 
 	// Watch Stdin for shutdown signal (watchdog)
 	go func() {

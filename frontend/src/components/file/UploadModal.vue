@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { X, Upload, File as FileIcon } from 'lucide-vue-next';
+import { X, Upload, File as FileIcon, Lock, Globe, UserCheck } from 'lucide-vue-next';
 
 const props = defineProps<{
   isOpen: boolean
@@ -10,6 +10,14 @@ const emit = defineEmits(['close', 'upload']);
 
 const fileInput = ref<HTMLInputElement | null>(null);
 const selectedFile = ref<File | null>(null);
+const encryptionType = ref('public');
+const password = ref('');
+const receiverPubKey = ref('');
+
+import { watch } from 'vue';
+watch(() => props.isOpen, (newVal) => {
+    if (newVal) reset();
+});
 
 const handleFileSelect = (event: Event) => {
   const target = event.target as HTMLInputElement;
@@ -27,14 +35,25 @@ const handleDrop = (event: DragEvent) => {
 
 const handleSubmit = () => {
   if (!selectedFile.value) return;
+  // Ensure we pass the values correctly
   emit('upload', { 
-      file: selectedFile.value
+      file: selectedFile.value,
+      options: {
+          encryptionType: encryptionType.value,
+          password: password.value,
+          receiverPubKey: receiverPubKey.value
+      }
   });
-  reset();
+  // Close happens after upload starts in parent, but we can reset form
+  // reset(); // Don't reset immediately, wait for close?
+  // Actually, parent closes modal on success.
 };
 
 const reset = () => {
   selectedFile.value = null;
+  encryptionType.value = 'public';
+  password.value = '';
+  receiverPubKey.value = '';
 };
 
 const close = () => {
@@ -75,17 +94,52 @@ const close = () => {
         </div>
 
         <!-- Selected File Preview -->
-        <div v-else class="flex items-center gap-4 p-4 bg-nord-6 dark:bg-nord-2 rounded-lg border border-nord-4 dark:border-nord-3">
-          <div class="p-2 bg-nord-4 dark:bg-nord-3 rounded">
-            <FileIcon class="w-6 h-6 text-nord-10" />
-          </div>
-          <div class="flex-1 min-w-0">
-            <p class="font-medium text-sm truncate text-nord-1 dark:text-nord-6">{{ selectedFile.name }}</p>
-            <p class="text-xs text-nord-3 dark:text-nord-4">{{ (selectedFile.size / 1024).toFixed(1) }} KB</p>
-          </div>
-          <button @click="selectedFile = null" class="text-nord-3 hover:text-red-500">
-            <X class="w-4 h-4" />
-          </button>
+        <div v-else class="space-y-4">
+            <div class="flex items-center gap-4 p-4 bg-nord-6 dark:bg-nord-2 rounded-lg border border-nord-4 dark:border-nord-3">
+              <div class="p-2 bg-nord-4 dark:bg-nord-3 rounded">
+                <FileIcon class="w-6 h-6 text-nord-10" />
+              </div>
+              <div class="flex-1 min-w-0">
+                <p class="font-medium text-sm truncate text-nord-1 dark:text-nord-6">{{ selectedFile.name }}</p>
+                <p class="text-xs text-nord-3 dark:text-nord-4">{{ (selectedFile.size / 1024).toFixed(1) }} KB</p>
+              </div>
+              <button @click="selectedFile = null" class="text-nord-3 hover:text-red-500">
+                <X class="w-4 h-4" />
+              </button>
+            </div>
+
+            <!-- Encryption Options -->
+            <div class="p-4 bg-nord-5 dark:bg-nord-2 rounded-xl border border-nord-4 dark:border-nord-3 space-y-4">
+                <label class="text-xs font-bold text-nord-3 dark:text-nord-4 uppercase">Encryption Mode</label>
+                <div class="flex p-1 bg-nord-4 dark:bg-nord-3 rounded-lg">
+                    <button 
+                        v-for="type in ['public', 'password', 'private']"
+                        :key="type"
+                        @click="encryptionType = type"
+                        :class="[
+                            'flex-1 py-1.5 text-xs font-bold rounded-md transition-all uppercase flex items-center justify-center gap-2',
+                            encryptionType === type 
+                                ? 'bg-white dark:bg-nord-1 text-nord-10 shadow-sm' 
+                                : 'text-nord-3 dark:text-nord-4 hover:text-nord-1 dark:hover:text-nord-6'
+                        ]"
+                    >
+                        <Globe v-if="type === 'public'" class="w-3 h-3" />
+                        <Lock v-if="type === 'password'" class="w-3 h-3" />
+                        <UserCheck v-if="type === 'private'" class="w-3 h-3" />
+                        {{ type }}
+                    </button>
+                </div>
+                
+                <div v-if="encryptionType === 'password'" class="space-y-2 animate-fade-in">
+                    <input v-model="password" type="password" placeholder="Set Password" class="w-full px-3 py-2 rounded-lg border border-nord-4 dark:border-nord-3 bg-white dark:bg-nord-0 text-sm focus:ring-2 focus:ring-nord-10 outline-none text-nord-0 dark:text-nord-6" />
+                    <p class="text-xs text-nord-3 dark:text-nord-4">Password will be required to decrypt this file.</p>
+                </div>
+                
+                <div v-if="encryptionType === 'private'" class="space-y-2 animate-fade-in">
+                    <input v-model="receiverPubKey" type="text" placeholder="Receiver Public Key (ID)" class="w-full px-3 py-2 rounded-lg border border-nord-4 dark:border-nord-3 bg-white dark:bg-nord-0 text-sm font-mono focus:ring-2 focus:ring-nord-10 outline-none text-nord-0 dark:text-nord-6" />
+                    <p class="text-xs text-nord-3 dark:text-nord-4">Only the specified user can decrypt this file.</p>
+                </div>
+            </div>
         </div>
 
         <!-- Submit Button -->

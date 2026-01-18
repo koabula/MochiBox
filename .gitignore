@@ -34,3 +34,5 @@ Thumbs.db
 *.swp
 
 electron/dist_electron
+
+/Log

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Home, Share2, Settings, Box, Sun, Moon, Activity, Globe } from 'lucide-vue-next';
+import { Home, Share2, Settings, Box, Sun, Moon, Activity, Globe, User } from 'lucide-vue-next';
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useNetworkStore } from '@/stores/network';
 
@@ -37,6 +37,7 @@ const tabs = [
   { id: 'shared', label: 'Shared', icon: Share2 },
   { id: 'tasks', label: 'Tasks', icon: Activity },
   { id: 'network', label: 'Network', icon: Globe },
+  { id: 'account', label: 'Account', icon: User },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 </script>

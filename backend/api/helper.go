@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/ipfs/boxo/files"
 )
 
 // GetFileStream resolves the file from IPFS
@@ -28,6 +30,25 @@ func (s *Server) GetFileStream(ctx context.Context, cid string) (io.Reader, stri
 	if err := s.DB.Table("files").Where("cid = ?", cid).Scan(&fileRec).Error; err == nil {
 		contentType = fileRec.MimeType
 		size = fileRec.Size
+	} else {
+		// Try shared history
+		var sharedRec struct {
+			MimeType string
+			Size     int64
+		}
+		if err := s.DB.Table("shared_files").Where("cid = ?", cid).Scan(&sharedRec).Error; err == nil {
+			contentType = sharedRec.MimeType
+			size = sharedRec.Size
+		}
+	}
+
+	// Fallback: If DB size is 0, try to get from reader if it supports Size()
+	if size == 0 {
+		if f, ok := reader.(files.File); ok {
+			if s, err := f.Size(); err == nil {
+				size = s
+			}
+		}
 	}
 
 	return reader, contentType, size, nil

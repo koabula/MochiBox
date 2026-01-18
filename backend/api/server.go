@@ -13,10 +13,11 @@ type Server struct {
 	Router      *gin.Engine
 	DB          *gorm.DB
 	IpfsManager *core.IpfsManager
+	AccountManager *core.AccountManager
 	ShutdownChan chan bool
 }
 
-func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManager) *Server {
+func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManager, accMgr *core.AccountManager) *Server {
 	r := gin.Default()
 	// Trust only local proxies to avoid security warning
 	_ = r.SetTrustedProxies([]string{"127.0.0.1"})
@@ -38,6 +39,7 @@ func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManage
 		Router:      r,
 		DB:          database,
 		IpfsManager: ipfsMgr,
+		AccountManager: accMgr,
 		ShutdownChan: make(chan bool),
 	}
 	s.RegisterRoutes()
@@ -56,6 +58,7 @@ func (s *Server) RegisterRoutes() {
 		s.registerConfigRoutes(api)
 		s.registerSystemRoutes(api)
 		s.registerSharedRoutes(api)
+		s.registerAccountRoutes(api)
 	}
     
     s.registerFileRoutes(s.DB)

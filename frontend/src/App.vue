@@ -18,6 +18,11 @@ import Toast from '@/components/ui/Toast.vue';
 import { Plus, Download, Moon, Sun } from 'lucide-vue-next';
 import api from '@/api';
 import { useTaskStore } from '@/stores/tasks';
+import { useAccountStore } from '@/stores/account';
+import AccountSetup from '@/components/account/AccountSetup.vue';
+import AccountUnlock from '@/components/account/AccountUnlock.vue';
+
+import AccountProfile from '@/components/account/AccountProfile.vue';
 
 const { t } = useI18n();
 const fileStore = useFileStore();
@@ -25,6 +30,7 @@ const settingsStore = useSettingsStore();
 const toastStore = useToastStore();
 const taskStore = useTaskStore();
 const networkStore = useNetworkStore();
+const accountStore = useAccountStore();
 
 const { files, loading, uploading } = storeToRefs(fileStore);
 
@@ -46,12 +52,25 @@ const toggleTheme = () => {
 };
 
 // Initialize theme
-onMounted(() => {
+onMounted(async () => {
   if (isDark.value) {
     document.documentElement.classList.add('dark');
   }
-  fileStore.fetchFiles();
-  settingsStore.fetchSettings();
+  
+  await accountStore.checkStatus();
+  
+  if (accountStore.configured && !accountStore.locked) {
+      fileStore.fetchFiles();
+      settingsStore.fetchSettings();
+  }
+});
+
+// Watch for unlock to load data
+watch(() => accountStore.locked, (isLocked) => {
+    if (!isLocked) {
+        fileStore.fetchFiles();
+        settingsStore.fetchSettings();
+    }
 });
 
 // Watch tab change to auto-refresh/sync
@@ -73,7 +92,7 @@ watch(currentTab, async (newTab) => {
 
 const handleUpload = async (data: any) => {
     try {
-        await fileStore.uploadFile(data.file);
+        await fileStore.uploadFile(data.file, data.options);
         showUploadModal.value = false;
         toastStore.success('File upload started in background');
     } catch (e) {
@@ -299,6 +318,22 @@ const handleUpdateDataDir = async () => {
     
     <Toast />
 
+    <!-- Loading Splash -->
+    <div v-if="accountStore.loading" class="fixed inset-0 bg-white dark:bg-nord-0 flex items-center justify-center z-[200]">
+        <div class="flex flex-col items-center gap-4">
+            <img src="/icon.png" class="w-16 h-16 animate-pulse" />
+            <div class="animate-spin rounded-full h-8 w-8 border-4 border-nord-4 dark:border-nord-3 border-t-nord-10"></div>
+        </div>
+    </div>
+
+    <!-- Account Setup Wizard -->
+    <AccountSetup v-else-if="!accountStore.configured" />
+    
+    <!-- Unlock Screen -->
+    <AccountUnlock v-else-if="accountStore.locked" />
+
+    <!-- Main Content -->
+    <template v-else>
     <!-- Sidebar -->
     <Sidebar v-model:currentTab="currentTab" />
 
@@ -355,6 +390,11 @@ const handleUpdateDataDir = async () => {
         <!-- Network Tab -->
         <div v-else-if="currentTab === 'network'" class="h-full animate-fade-in">
              <NetworkPage />
+        </div>
+
+        <!-- Account Tab -->
+        <div v-else-if="currentTab === 'account'" class="h-full animate-fade-in">
+             <AccountProfile />
         </div>
 
         <!-- Settings Tab -->
@@ -491,6 +531,7 @@ const handleUpdateDataDir = async () => {
 
       </main>
     </div>
+    </template>
 
     <!-- Modals -->
     <UploadModal 

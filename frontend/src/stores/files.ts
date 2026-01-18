@@ -29,7 +29,7 @@ export const useFileStore = defineStore('files', () => {
     }
   }
 
-  async function uploadFile(file: File) {
+  async function uploadFile(file: File, options: { encryptionType: string, password?: string, receiverPubKey?: string } = { encryptionType: 'public' }) {
     const taskStore = useTaskStore();
     const taskId = taskStore.addTask('upload', file.name);
     
@@ -37,6 +37,9 @@ export const useFileStore = defineStore('files', () => {
     
     const formData = new FormData();
     formData.append('file', file as any);
+    formData.append('encryption_type', options.encryptionType);
+    if (options.password) formData.append('password', options.password);
+    if (options.receiverPubKey) formData.append('receiver_pub_key', options.receiverPubKey);
 
     try {
       await api.post('/files/upload', formData, {

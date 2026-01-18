@@ -108,12 +108,22 @@ func (m *IpfsManager) InitRepo() error {
 func (m *IpfsManager) ConfigRepo() error {
 	// Set custom config to avoid conflicts
 	// We use port 0 for API and Gateway to let OS assign random ports
+	mdnsEnabled := runtime.GOOS != "windows"
+	if v := strings.TrimSpace(os.Getenv("MOCHIBOX_MDNS")); v != "" {
+		if v == "1" || strings.EqualFold(v, "true") {
+			mdnsEnabled = true
+		} else if v == "0" || strings.EqualFold(v, "false") {
+			mdnsEnabled = false
+		}
+	}
+
 	configs := [][]string{
 		{"Addresses.API", `"/ip4/127.0.0.1/tcp/0"`},
 		{"Addresses.Gateway", `"/ip4/127.0.0.1/tcp/0"`},
 		// Enable CORS for frontend
 		{"API.HTTPHeaders.Access-Control-Allow-Origin", `["http://localhost:5173", "app://*"]`},
 		{"API.HTTPHeaders.Access-Control-Allow-Methods", `["PUT", "POST", "GET"]`},
+		{"Discovery.MDNS.Enabled", strconv.FormatBool(mdnsEnabled)},
 	}
 
 	for _, cfg := range configs {
@@ -154,6 +164,21 @@ func (m *IpfsManager) Start(ctx context.Context) error {
 	// Remove api file if exists to avoid reading stale address
 	os.Remove(filepath.Join(m.DataDir, "api"))
 	os.Remove(filepath.Join(m.DataDir, "gateway"))
+
+	mdnsEnabled := runtime.GOOS != "windows"
+	if v := strings.TrimSpace(os.Getenv("MOCHIBOX_MDNS")); v != "" {
+		if v == "1" || strings.EqualFold(v, "true") {
+			mdnsEnabled = true
+		} else if v == "0" || strings.EqualFold(v, "false") {
+			mdnsEnabled = false
+		}
+	}
+
+	healCmd := exec.Command(m.BinPath, "config", "Discovery.MDNS.Enabled", strconv.FormatBool(mdnsEnabled), "--json")
+	healCmd.Env = append(os.Environ(), "IPFS_PATH="+m.DataDir)
+	if err := healCmd.Run(); err != nil {
+		log.Printf("Warning: Failed to ensure MDNS config: %v", err)
+	}
 
 	cmd := exec.CommandContext(ctx, m.BinPath, "daemon", "--enable-gc")
 	cmd.Env = append(os.Environ(), "IPFS_PATH="+m.DataDir)

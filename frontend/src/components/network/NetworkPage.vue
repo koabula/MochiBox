@@ -196,8 +196,10 @@ const copyToClipboard = (text: string) => {
                     <h3 class="font-bold text-lg text-nord-0 dark:text-nord-6 mb-4">My Swarm Addresses</h3>
                     <div class="space-y-2 max-h-60 overflow-y-auto pr-2">
                         <div v-for="addr in networkStore.status.addresses" :key="addr" class="group flex items-center gap-2 p-2 bg-nord-6 dark:bg-nord-0 rounded-lg border border-nord-4 dark:border-nord-2 hover:border-nord-10 transition-colors">
-                            <code class="flex-1 font-mono text-xs text-nord-2 dark:text-nord-4 break-all">{{ addr }}</code>
-                            <button @click="copyToClipboard(addr)" class="opacity-0 group-hover:opacity-100 p-1 text-nord-3 hover:text-nord-10 transition-opacity">
+                            <code class="flex-1 font-mono text-xs text-nord-2 dark:text-nord-4 break-all">
+                                {{ addr.includes('/p2p/') ? addr : `${addr}/p2p/${networkStore.status.peer_id}` }}
+                            </code>
+                            <button @click="copyToClipboard(addr.includes('/p2p/') ? addr : `${addr}/p2p/${networkStore.status.peer_id}`)" class="opacity-0 group-hover:opacity-100 p-1 text-nord-3 hover:text-nord-10 transition-opacity">
                                 <Copy class="w-4 h-4" />
                             </button>
                         </div>
