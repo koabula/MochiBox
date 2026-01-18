@@ -13,9 +13,11 @@ type File struct {
 	Name           string         `json:"name"`
 	Size           int64          `json:"size"`
 	MimeType       string         `json:"mime_type"`
-	EncryptionType string         `json:"encryption_type"` // public, password, private
-	EncryptionMeta string         `json:"encryption_meta"` // salt (hex) or encrypted_key (base64)
-	CreatedAt      time.Time      `json:"created_at"`
+	EncryptionType  string         `json:"encryption_type"` // public, password, private
+	EncryptionMeta  string         `json:"encryption_meta"` // salt (hex) or encrypted_key (base64)
+	SavedPassword   string         `json:"saved_password"`  // Encrypted password (by Account Public Key)
+	RecipientPubKey string         `json:"recipient_pub_key"` // Receiver Public Key (Hex)
+	CreatedAt       time.Time      `json:"created_at"`
 }
 
 type SharedFile struct {

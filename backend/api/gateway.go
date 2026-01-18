@@ -32,7 +32,7 @@ func (s *Server) handlePreview(c *gin.Context) {
     
     // Decryption Handling
     // Check if file is encrypted in DB (My Files) OR Shared History OR provided via URL Params (Stateless)
-    var encryptionType, encryptionMeta, filename string
+    var encryptionType, encryptionMeta, filename, savedPassword string
     
     // 1. Check My Files
     var file db.File
@@ -40,6 +40,7 @@ func (s *Server) handlePreview(c *gin.Context) {
         encryptionType = file.EncryptionType
         encryptionMeta = file.EncryptionMeta
         filename = file.Name
+        savedPassword = file.SavedPassword
     } else {
         // 2. Check Shared History (Fallback if deleted from My Files but still in History)
         var sharedFile db.SharedFile
@@ -49,28 +50,12 @@ func (s *Server) handlePreview(c *gin.Context) {
             filename = sharedFile.Name
         } else {
             // 3. Check URL Params (Stateless Fallback)
-            // If user provides 'meta' in query, we trust it.
-            // But we also need 'type'. For now, if 'meta' is present, we assume 'password' if len < 100?
-            // Or we assume 'password' if not specified? 
-            // Ideally URL should have both. But frontend might just send 'meta'.
-            // Let's infer:
-            // Salt (Hex) is usually 32 chars (16 bytes).
-            // Encrypted Session Key (Base64) is longer.
-            // Or better, check if 'password' param is present -> assume 'password' type.
-            
             metaParam := c.Query("meta")
             if metaParam != "" {
                 encryptionMeta = metaParam
-                // Infer type or get from param if we add it later
                 if c.Query("password") != "" {
                     encryptionType = "password"
                 } else {
-                    // Could be private? But Private needs local private key anyway.
-                    // If Private, we usually don't pass meta in URL?
-                    // Actually, for Private, meta is the encrypted session key.
-                    // If we support stateless Private sharing, we need to pass that blob too.
-                    // Let's assume 'password' if 'password' query param exists.
-                    // Else if 'meta' exists, maybe 'private'?
                     encryptionType = "private" 
                 }
             }
@@ -80,6 +65,29 @@ func (s *Server) handlePreview(c *gin.Context) {
     if encryptionType != "" {
         if encryptionType == "password" {
             password := c.Query("password")
+            
+            // Try saved password if needed
+            if password == "" && savedPassword != "" {
+                 if s.AccountManager.Wallet != nil {
+                     // Decrypt saved password
+                     encPass, err := base64.StdEncoding.DecodeString(savedPassword)
+                     if err == nil {
+                         // Convert Ed25519 keys to Curve25519 for Box
+                         curvePub, _ := crypto.Ed25519PublicKeyToCurve25519(s.AccountManager.Wallet.PublicKey)
+                         curvePriv, _ := crypto.Ed25519PrivateKeyToCurve25519(s.AccountManager.Wallet.PrivateKey)
+                         var pubKey [32]byte
+                         var privKey [32]byte
+                         copy(pubKey[:], curvePub)
+                         copy(privKey[:], curvePriv)
+                         
+                         decrypted, err := crypto.DecryptBoxAnonymous(encPass, &pubKey, &privKey)
+                         if err == nil {
+                             password = string(decrypted)
+                         }
+                     }
+                 }
+            }
+            
             if password == "" {
                 c.String(http.StatusUnauthorized, "Password required")
                 return

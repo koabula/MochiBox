@@ -33,6 +33,7 @@ func (s *Server) registerFileRoutes(db *gorm.DB) {
 			s.handleDeleteFile(c, db)
 		})
         api.POST("/:id/download", s.handleDownloadToDisk)
+        api.POST("/:id/reveal", s.handleRevealPassword)
         api.POST("/download/shared", s.handleDownloadShared)
 		api.POST("/sync", func(c *gin.Context) {
 			s.handleSyncFiles(c, db)
@@ -60,6 +61,12 @@ func ensureUniquePath(path string) string {
 
 func (s *Server) handleDownloadToDisk(c *gin.Context) {
     id := c.Param("id")
+    var req struct {
+        Password string `json:"password"`
+    }
+    // Bind JSON if present, ignore error if empty body
+    c.ShouldBindJSON(&req)
+
     var file db.File
     if err := s.DB.First(&file, id).Error; err != nil {
         c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
@@ -89,6 +96,65 @@ func (s *Server) handleDownloadToDisk(c *gin.Context) {
         c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
         return
     }
+
+    // Decryption Logic
+    if file.EncryptionType == "password" {
+        password := req.Password
+        
+        // If password not provided, try to use saved password
+        if password == "" && file.SavedPassword != "" {
+            if s.AccountManager.Wallet != nil {
+                // Decrypt saved password
+                encPass, err := base64.StdEncoding.DecodeString(file.SavedPassword)
+                if err == nil {
+                     // Convert Ed25519 keys to Curve25519 for Box
+                     curvePub, _ := crypto.Ed25519PublicKeyToCurve25519(s.AccountManager.Wallet.PublicKey)
+                     curvePriv, _ := crypto.Ed25519PrivateKeyToCurve25519(s.AccountManager.Wallet.PrivateKey)
+                     var pubKey [32]byte
+                     var privKey [32]byte
+                     copy(pubKey[:], curvePub)
+                     copy(privKey[:], curvePriv)
+                     
+                     decrypted, err := crypto.DecryptBoxAnonymous(encPass, &pubKey, &privKey)
+                     if err == nil {
+                         password = string(decrypted)
+                     }
+                }
+            }
+        }
+
+        if password == "" {
+            c.JSON(http.StatusUnauthorized, gin.H{"error": "Password required"})
+            return
+        }
+
+        salt, _ := hex.DecodeString(file.EncryptionMeta)
+        key := crypto.DeriveKey(password, salt)
+        decReader, err := crypto.NewAESCTRDecrypter(reader, key)
+        if err != nil {
+            c.JSON(http.StatusInternalServerError, gin.H{"error": "Decryption init failed"})
+            return
+        }
+        reader = decReader
+
+    } else if file.EncryptionType == "private" {
+         if s.AccountManager.IsLocked() {
+             c.JSON(http.StatusUnauthorized, gin.H{"error": "Account locked"})
+             return
+         }
+         encKey, _ := base64.StdEncoding.DecodeString(file.EncryptionMeta)
+         sessionKey, err := s.AccountManager.DecryptBox(encKey)
+         if err != nil {
+             c.JSON(http.StatusUnauthorized, gin.H{"error": "Failed to decrypt session key"})
+             return
+         }
+         decReader, err := crypto.NewAESCTRDecrypter(reader, sessionKey)
+         if err != nil {
+             c.JSON(http.StatusInternalServerError, gin.H{"error": "Decryption init failed"})
+             return
+         }
+         reader = decReader
+    }
     
     dst, err := os.Create(dstPath)
     if err != nil {
@@ -103,6 +169,47 @@ func (s *Server) handleDownloadToDisk(c *gin.Context) {
     }
     
     c.JSON(http.StatusOK, gin.H{"status": "saved", "path": dstPath})
+}
+
+func (s *Server) handleRevealPassword(c *gin.Context) {
+    id := c.Param("id")
+    var file db.File
+    if err := s.DB.First(&file, id).Error; err != nil {
+        c.JSON(http.StatusNotFound, gin.H{"error": "File not found"})
+        return
+    }
+    
+    if file.SavedPassword == "" {
+        c.JSON(http.StatusNotFound, gin.H{"error": "No saved password"})
+        return
+    }
+    
+    if s.AccountManager.Wallet == nil {
+        c.JSON(http.StatusUnauthorized, gin.H{"error": "Account locked"})
+        return
+    }
+    
+    encPass, err := base64.StdEncoding.DecodeString(file.SavedPassword)
+    if err != nil {
+         c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid saved password"})
+         return
+    }
+    
+    // Convert Ed25519 keys to Curve25519 for Box
+    curvePub, _ := crypto.Ed25519PublicKeyToCurve25519(s.AccountManager.Wallet.PublicKey)
+    curvePriv, _ := crypto.Ed25519PrivateKeyToCurve25519(s.AccountManager.Wallet.PrivateKey)
+    var pubKey [32]byte
+    var privKey [32]byte
+    copy(pubKey[:], curvePub)
+    copy(privKey[:], curvePriv)
+    
+    decrypted, err := crypto.DecryptBoxAnonymous(encPass, &pubKey, &privKey)
+    if err != nil {
+        c.JSON(http.StatusInternalServerError, gin.H{"error": "Decryption failed"})
+        return
+    }
+    
+    c.JSON(http.StatusOK, gin.H{"password": string(decrypted)})
 }
 
 func (s *Server) handleDownloadShared(c *gin.Context) {
@@ -225,6 +332,10 @@ func (s *Server) handleUpload(c *gin.Context, database *gorm.DB) {
 	// Encryption Logic
 	encType := c.PostForm("encryption_type")
 	if encType == "" { encType = "public" }
+    
+    savePassword := c.PostForm("save_password") == "true"
+    var savedPassword string
+    var recipientPubKey string
 	
 	var encryptionMeta string
 	mimeType := fileHeader.Header.Get("Content-Type")
@@ -243,6 +354,17 @@ func (s *Server) handleUpload(c *gin.Context, database *gorm.DB) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Password required"})
 			return
 		}
+
+        if savePassword {
+            if s.AccountManager.Wallet != nil {
+                // Encrypt password with Account Public Key
+                curvePub, _ := crypto.Ed25519PublicKeyToCurve25519(s.AccountManager.Wallet.PublicKey)
+                encPass, err := crypto.EncryptSessionKey(curvePub, []byte(password))
+                if err == nil {
+                    savedPassword = base64.StdEncoding.EncodeToString(encPass)
+                }
+            }
+        }
 		
 		salt, err := crypto.GenerateSalt(16)
 		if err != nil {
@@ -267,6 +389,7 @@ func (s *Server) handleUpload(c *gin.Context, database *gorm.DB) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Receiver Public Key required"})
 			return
 		}
+        recipientPubKey = receiverPubHex
 		
 		edPub, err := hex.DecodeString(receiverPubHex)
 		if err != nil || len(edPub) != 32 {
@@ -319,6 +442,8 @@ func (s *Server) handleUpload(c *gin.Context, database *gorm.DB) {
 		MimeType:       mimeType,
 		EncryptionType: encType,
 		EncryptionMeta: encryptionMeta,
+        SavedPassword:  savedPassword,
+        RecipientPubKey: recipientPubKey,
 		CreatedAt:      time.Now(),
 	}
 

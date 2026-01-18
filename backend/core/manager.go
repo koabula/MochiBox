@@ -108,11 +108,9 @@ func (m *IpfsManager) InitRepo() error {
 func (m *IpfsManager) ConfigRepo() error {
 	// Set custom config to avoid conflicts
 	// We use port 0 for API and Gateway to let OS assign random ports
-	mdnsEnabled := runtime.GOOS != "windows"
+	mdnsEnabled := true
 	if v := strings.TrimSpace(os.Getenv("MOCHIBOX_MDNS")); v != "" {
-		if v == "1" || strings.EqualFold(v, "true") {
-			mdnsEnabled = true
-		} else if v == "0" || strings.EqualFold(v, "false") {
+		if v == "0" || strings.EqualFold(v, "false") {
 			mdnsEnabled = false
 		}
 	}
@@ -124,6 +122,7 @@ func (m *IpfsManager) ConfigRepo() error {
 		{"API.HTTPHeaders.Access-Control-Allow-Origin", `["http://localhost:5173", "app://*"]`},
 		{"API.HTTPHeaders.Access-Control-Allow-Methods", `["PUT", "POST", "GET"]`},
 		{"Discovery.MDNS.Enabled", strconv.FormatBool(mdnsEnabled)},
+		{"Pubsub.Router", `"gossipsub"`},
 	}
 
 	for _, cfg := range configs {
@@ -165,11 +164,9 @@ func (m *IpfsManager) Start(ctx context.Context) error {
 	os.Remove(filepath.Join(m.DataDir, "api"))
 	os.Remove(filepath.Join(m.DataDir, "gateway"))
 
-	mdnsEnabled := runtime.GOOS != "windows"
+	mdnsEnabled := true
 	if v := strings.TrimSpace(os.Getenv("MOCHIBOX_MDNS")); v != "" {
-		if v == "1" || strings.EqualFold(v, "true") {
-			mdnsEnabled = true
-		} else if v == "0" || strings.EqualFold(v, "false") {
+		if v == "0" || strings.EqualFold(v, "false") {
 			mdnsEnabled = false
 		}
 	}
@@ -180,7 +177,7 @@ func (m *IpfsManager) Start(ctx context.Context) error {
 		log.Printf("Warning: Failed to ensure MDNS config: %v", err)
 	}
 
-	cmd := exec.CommandContext(ctx, m.BinPath, "daemon", "--enable-gc")
+	cmd := exec.CommandContext(ctx, m.BinPath, "daemon", "--enable-gc", "--enable-pubsub-experiment")
 	cmd.Env = append(os.Environ(), "IPFS_PATH="+m.DataDir)
 	
 	// Capture stdout/stderr for logging

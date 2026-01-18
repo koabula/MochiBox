@@ -118,6 +118,9 @@ const handleSync = async () => {
 
 const handlePreview = (file: any) => {
     let url = `http://localhost:3666/api/preview/${file.cid}`;
+    if (file.password) {
+        url += `?password=${encodeURIComponent(file.password)}`;
+    }
     window.open(url, '_blank');
 };
 
@@ -168,7 +171,10 @@ const handleDownload = async (file: any) => {
                 try {
                     const writable = await handle.createWritable();
                     const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
-                    const url = `${baseUrl}/preview/${file.cid}?download=true`;
+                    let url = `${baseUrl}/preview/${file.cid}?download=true`;
+                    if (file.password) {
+                        url += `&password=${encodeURIComponent(file.password)}`;
+                    }
                     
                     // We need to fetch as stream and pipe to writable
                     const response = await fetch(url);
@@ -241,7 +247,7 @@ const handleDownload = async (file: any) => {
         
         try {
             // Use backend to download
-            await api.post(`/files/${file.id}/download`);
+            await api.post(`/files/${file.id}/download`, { password: file.password });
             taskStore.completeTask(taskId);
         } catch (e: any) {
              console.error(e);
@@ -255,7 +261,10 @@ const handleDownload = async (file: any) => {
     toastStore.success(`Download started for ${file.name}`);
     
     try {
-        const url = `/preview/${file.cid}?download=true`;
+        let url = `/preview/${file.cid}?download=true`;
+        if (file.password) {
+            url += `&password=${encodeURIComponent(file.password)}`;
+        }
         
         const response = await api.get(url, {
             responseType: 'blob',

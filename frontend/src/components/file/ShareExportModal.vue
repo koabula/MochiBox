@@ -2,6 +2,7 @@
 import { Copy, X, Shield, Link } from 'lucide-vue-next';
 import { useToastStore } from '@/stores/toast';
 import { ref } from 'vue';
+import api from '@/api';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -18,6 +19,17 @@ watch(() => props.isOpen, (newVal) => {
     if (newVal) {
         includePassword.value = false;
         passwordInput.value = '';
+    }
+});
+
+watch(includePassword, async (val) => {
+    if (val && !passwordInput.value && props.file.saved_password) {
+        try {
+            const res = await api.post(`/files/${props.file.id}/reveal`);
+            passwordInput.value = res.data.password;
+        } catch (e) {
+            console.error("Failed to fetch password", e);
+        }
     }
 });
 

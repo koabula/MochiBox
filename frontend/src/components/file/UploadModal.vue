@@ -13,6 +13,7 @@ const selectedFile = ref<File | null>(null);
 const encryptionType = ref('public');
 const password = ref('');
 const receiverPubKey = ref('');
+const savePassword = ref(false);
 
 import { watch } from 'vue';
 watch(() => props.isOpen, (newVal) => {
@@ -41,7 +42,8 @@ const handleSubmit = () => {
       options: {
           encryptionType: encryptionType.value,
           password: password.value,
-          receiverPubKey: receiverPubKey.value
+          receiverPubKey: receiverPubKey.value,
+          savePassword: savePassword.value
       }
   });
   // Close happens after upload starts in parent, but we can reset form
@@ -54,6 +56,7 @@ const reset = () => {
   encryptionType.value = 'public';
   password.value = '';
   receiverPubKey.value = '';
+  savePassword.value = false;
 };
 
 const close = () => {
@@ -132,6 +135,10 @@ const close = () => {
                 
                 <div v-if="encryptionType === 'password'" class="space-y-2 animate-fade-in">
                     <input v-model="password" type="password" placeholder="Set Password" class="w-full px-3 py-2 rounded-lg border border-nord-4 dark:border-nord-3 bg-white dark:bg-nord-0 text-sm focus:ring-2 focus:ring-nord-10 outline-none text-nord-0 dark:text-nord-6" />
+                    <label class="flex items-center gap-2 cursor-pointer select-none">
+                        <input type="checkbox" v-model="savePassword" class="rounded border-nord-4 dark:border-nord-3 text-nord-10 focus:ring-nord-10 bg-white dark:bg-nord-0" />
+                        <span class="text-xs text-nord-3 dark:text-nord-4">Save password locally (auto-fill for me)</span>
+                    </label>
                     <p class="text-xs text-nord-3 dark:text-nord-4">Password will be required to decrypt this file.</p>
                 </div>
                 

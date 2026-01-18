@@ -1,7 +1,7 @@
 {
   "name": "mochibox",
   "productName": "MochiBox",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "main": "dist/main.js",
   "scripts": {
     "build": "tsc",
@@ -45,7 +45,9 @@
         {
           "from": "resources/bin/win",
           "to": "bin",
-          "filter": ["**/*"]
+          "filter": [
+            "**/*"
+          ]
         }
       ]
     },
@@ -62,7 +64,9 @@
         {
           "from": "resources/bin/mac",
           "to": "bin",
-          "filter": ["**/*"]
+          "filter": [
+            "**/*"
+          ]
         }
       ]
     },
@@ -72,7 +76,9 @@
         {
           "from": "resources/bin/linux",
           "to": "bin",
-          "filter": ["**/*"]
+          "filter": [
+            "**/*"
+          ]
         }
       ]
     }
