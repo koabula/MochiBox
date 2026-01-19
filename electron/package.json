@@ -12,8 +12,12 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
-  "description": "",
+  "license": "GPL-3.0",
+  "description": "A secure, decentralized file sharing tool powered by IPFS.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/koabula/MochiBox.git"
+  },
   "devDependencies": {
     "electron": "^39.2.7",
     "electron-builder": "^26.4.0",

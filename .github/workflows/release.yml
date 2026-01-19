@@ -1,0 +1,84 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Release
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+
+      - name: Install Dependencies
+        run: npm install
+
+      # Determine platform-specific variables for the build
+      - name: Set Platform Env (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        run: |
+          echo "PLATFORM_FOLDER=win" >> $GITHUB_ENV
+          echo "BINARY_NAME=mochibox-core.exe" >> $GITHUB_ENV
+
+      - name: Set Platform Env (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          echo "PLATFORM_FOLDER=mac" >> $GITHUB_ENV
+          echo "BINARY_NAME=mochibox-core" >> $GITHUB_ENV
+
+      - name: Set Platform Env (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          echo "PLATFORM_FOLDER=linux" >> $GITHUB_ENV
+          echo "BINARY_NAME=mochibox-core" >> $GITHUB_ENV
+
+      # Build the Go backend for the current platform only
+      - name: Build Go Backend
+        shell: bash
+        run: |
+          echo "Building backend for ${{ env.PLATFORM_FOLDER }}..."
+          mkdir -p electron/resources/bin/${{ env.PLATFORM_FOLDER }}
+          cd backend
+          go build -ldflags="-s -w" -o ../electron/resources/bin/${{ env.PLATFORM_FOLDER }}/${{ env.BINARY_NAME }} .
+
+      # Download IPFS binaries (downloads all, but we only need one)
+      - name: Download IPFS Dependencies
+        run: node scripts/download-kubo.js
+
+      # Build Frontend
+      - name: Build Frontend
+        run: npm run build -w frontend
+
+      # Build and Release Electron App
+      - name: Build and Release Electron
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          npm run build -w electron
+          cd electron
+          npx electron-builder --publish always
