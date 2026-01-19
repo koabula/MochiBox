@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Home, Share2, Settings, Box, Sun, Moon, Activity, Globe, User } from 'lucide-vue-next';
+import { Home, Share2, Settings, Box, Sun, Moon, Activity, Globe, User, Info } from 'lucide-vue-next';
 import { ref, onMounted, onUnmounted } from 'vue';
 import { useNetworkStore } from '@/stores/network';
 
@@ -9,6 +9,12 @@ const props = defineProps<{
 
 const emit = defineEmits(['update:currentTab']);
 const networkStore = useNetworkStore();
+
+const version = __APP_VERSION__;
+
+const openAbout = () => {
+  window.open('https://github.com/koabula/MochiBox', '_blank');
+};
 
 const isDark = ref(localStorage.getItem('theme') === 'dark' || document.documentElement.classList.contains('dark'));
 
@@ -98,6 +104,14 @@ const tabs = [
       >
         <component :is="isDark ? Sun : Moon" class="w-5 h-5" />
         <span class="text-sm font-medium">{{ isDark ? 'Light Mode' : 'Dark Mode' }}</span>
+      </button>
+
+      <button 
+        @click="openAbout"
+        class="flex items-center gap-3 px-4 py-3 rounded-lg text-nord-3 dark:text-nord-4 hover:bg-nord-5 dark:hover:bg-nord-2 transition-all w-full"
+      >
+        <component :is="Info" class="w-5 h-5" />
+        <span class="text-sm font-medium">About ({{ version }})</span>
       </button>
     </div>
   </aside>

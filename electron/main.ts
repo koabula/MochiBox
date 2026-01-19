@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron';
 import path from 'path';
 import { spawn, ChildProcess } from 'child_process';
 import fs from 'fs';
@@ -51,6 +51,15 @@ function createWindow() {
   ipcMain.on('app-restart', () => {
     app.relaunch();
     app.exit(0);
+  });
+
+  // Handle external links
+  mainWindow.webContents.setWindowOpenHandler((details) => {
+    if (details.url.startsWith('http:') || details.url.startsWith('https:')) {
+      shell.openExternal(details.url);
+      return { action: 'deny' };
+    }
+    return { action: 'allow' };
   });
 
   // Debugging hooks
