@@ -200,20 +200,40 @@ const handleDownload = async (file: any, password?: string) => {
          return;
     }
 
-    // Check settings for "Always ask" or missing path
-    if (settingsStore.askPath || !settingsStore.downloadPath) {
-        try {
-            // @ts-ignore
-            if (window.showSaveFilePicker) {
+    // Determine Strategy
+    // Strategy A: Frontend FileSystem API / Blob (Interactive or Fallback)
+    // Strategy B: Backend Silent Download (Only if path set, ask disabled, and file not encrypted)
+    
+    // Note: Backend currently does not support stateless encrypted download easily.
+    // So we force Encrypted files to use Frontend Download for now.
+    const isEncrypted = file.encryption_type === 'password' || file.encryption_type === 'private';
+    const useBackendSilent = !settingsStore.askPath && settingsStore.downloadPath && !isEncrypted;
+
+    const taskId = taskStore.addTask('download', filename);
+    toastStore.success(`Download started for ${filename}`);
+
+    try {
+        if (useBackendSilent) {
+             // Strategy B: Backend Silent
+             await api.post('/files/download/shared', {
+                cid: file.cid,
+                name: filename,
+            });
+            taskStore.completeTask(taskId);
+            return;
+        }
+        
+        // Strategy A: Frontend Download
+        // Try File System Access API first if "Ask Path" is enabled
+        if (settingsStore.askPath) {
+             try {
                 // @ts-ignore
-                const handle = await window.showSaveFilePicker({
-                    suggestedName: filename
-                });
-                
-                const taskId = taskStore.addTask('download', filename);
-                toastStore.success(`Download started for ${filename}`);
-                
-                try {
+                if (window.showSaveFilePicker) {
+                    // @ts-ignore
+                    const handle = await window.showSaveFilePicker({
+                        suggestedName: filename
+                    });
+                    
                     const writable = await handle.createWritable();
                     const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
                     let url = `${baseUrl}/preview/${file.cid}?download=true`;
@@ -221,10 +241,7 @@ const handleDownload = async (file: any, password?: string) => {
                     const params = new URLSearchParams();
                     if (pw) params.append('password', pw);
                     if (file.encryption_meta) params.append('meta', file.encryption_meta);
-                    
-                    if (params.toString()) {
-                        url += `&${params.toString()}`;
-                    }
+                    if (params.toString()) url += `&${params.toString()}`;
                     
                     const response = await fetch(url);
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -233,57 +250,24 @@ const handleDownload = async (file: any, password?: string) => {
                     await response.body.pipeTo(writable);
                     
                     taskStore.completeTask(taskId);
-                    return; 
-                    
-                } catch (e: any) {
-                    console.error(e);
-                    taskStore.failTask(taskId, e.message);
-                    toastStore.error(`Download failed: ${e.message}`);
                     return;
                 }
-            }
-        } catch (err: any) {
-            if (err.name === 'AbortError') return;
-            console.warn("FileSystemAccess API not supported or failed", err);
+             } catch (err: any) {
+                 if (err.name === 'AbortError') {
+                     taskStore.removeTask(taskId); // Cancelled
+                     return;
+                 }
+                 console.warn("FileSystemAccess API failed, falling back to Blob", err);
+                 // Fallthrough to Blob
+             }
         }
-    }
-
-    // Backend Silent Download
-    if (!settingsStore.askPath && settingsStore.downloadPath) {
-        const taskId = taskStore.addTask('download', filename);
-        toastStore.success(`Download started for ${filename}`);
         
-        try {
-            // For now, let's fallback to Blob Download for encrypted files to ensure password support works
-            if (file.encryption_type === 'password' || file.encryption_type === 'private') {
-                 throw new Error("Encrypted files fallback to browser download");
-            }
-
-            await api.post('/files/download/shared', {
-                cid: file.cid,
-                name: filename,
-            });
-            taskStore.completeTask(taskId);
-        } catch (e: any) {
-             // Fallthrough to blob download
-        }
-        // return; // Don't return, fallthrough
-    }
-
-    // Fallback: Browser Blob Download
-    const taskId = taskStore.addTask('download', filename);
-    toastStore.success('Download started');
-    
-    try {
+        // Fallback: Blob Download (Browser Default)
         let url = `/preview/${file.cid}?download=true`;
-        
         const params = new URLSearchParams();
         if (pw) params.append('password', pw);
         if (file.encryption_meta) params.append('meta', file.encryption_meta);
-        
-        if (params.toString()) {
-            url += `&${params.toString()}`;
-        }
+        if (params.toString()) url += `&${params.toString()}`;
 
         const response = await api.get(url, {
             responseType: 'blob',
@@ -305,7 +289,9 @@ const handleDownload = async (file: any, password?: string) => {
         window.URL.revokeObjectURL(downloadUrl);
         
         taskStore.completeTask(taskId);
+
     } catch (e: any) {
+        console.error(e);
         taskStore.failTask(taskId, e.message || 'Download failed');
         toastStore.error(`Download failed: ${e.message}`);
     }

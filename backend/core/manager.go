@@ -90,11 +90,9 @@ func (m *IpfsManager) InitRepo() error {
 		return nil // Already initialized
 	}
 
-	// ipfs init --profile server
-	// Using "server" profile disables local discovery features initially, 
-	// but we might want "standard" for desktop use. 
-	// However, to avoid port conflicts, we will customize config anyway.
-	cmd := exec.Command(m.BinPath, "init", "--profile", "server")
+	// ipfs init (default profile supports local discovery)
+	// We avoid "server" profile for desktop use to enable MDNS/Local Discovery by default.
+	cmd := exec.Command(m.BinPath, "init")
 	cmd.Env = append(os.Environ(), "IPFS_PATH="+m.DataDir)
 	
 	output, err := cmd.CombinedOutput()

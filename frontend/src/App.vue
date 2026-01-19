@@ -131,44 +131,35 @@ const handleDownload = async (file: any) => {
         return;
     }
 
-    // Determine where to save
-    let downloadPath = '';
+    const taskId = taskStore.addTask('download', file.name);
+    toastStore.success(`Download started for ${file.name}`);
+
+    // Determine Strategy
+    // Strategy A: Frontend FileSystem API / Blob (Interactive or Fallback)
+    // Strategy B: Backend Silent Download (Only if path set, ask disabled, and file not encrypted)
     
-    // Check settings for "Always ask" or missing path
-    if (settingsStore.askPath || !settingsStore.downloadPath) {
-        // Since we are in browser environment, we can't easily open a native directory picker
-        // and return the path to the code.
-        // However, we can rely on the browser's default behavior which is:
-        // 1. If user browser settings say "Ask where to save", it asks.
-        // 2. Otherwise it saves to default Downloads.
-        
-        // But the requirement says: "If enabled... let user choose path".
-        // In a pure web app, we can't force a path unless we use the File System Access API (showSaveFilePicker)
-        // which returns a handle, not a path string we can pass to 'a' tag.
-        
-        // Strategy:
-        // If "Ask Path" is enabled (or no path set), we rely on browser prompt (by not setting a specific behavior? No, browser controls this).
-        // Actually, for Electron, we might be able to invoke a dialog via IPC? 
-        // But here we are using standard web download flow.
-        
-        // Wait, for Electron apps, usually we can configure the 'will-download' event in main process.
-        // But since we are doing client-side blob download:
-        // window.showSaveFilePicker() is the modern way.
-        
-        try {
-            // @ts-ignore
-            if (window.showSaveFilePicker) {
+    const isEncrypted = file.encryption_type === 'password' || file.encryption_type === 'private';
+    const useBackendSilent = !settingsStore.askPath && settingsStore.downloadPath && !isEncrypted;
+
+    try {
+        if (useBackendSilent) {
+             // Strategy B: Backend Silent
+             await api.post(`/files/${file.id}/download`, { password: file.password });
+             taskStore.completeTask(taskId);
+             return;
+        }
+
+        // Strategy A: Frontend Download
+        // Try File System Access API first if "Ask Path" is enabled
+        if (settingsStore.askPath) {
+             try {
                 // @ts-ignore
-                const handle = await window.showSaveFilePicker({
-                    suggestedName: file.name
-                });
-                // If user picked a file, we get a writable stream
-                // We can stream the download directly to it!
-                
-                const taskId = taskStore.addTask('download', file.name);
-                toastStore.success(`Download started for ${file.name}`);
-                
-                try {
+                if (window.showSaveFilePicker) {
+                    // @ts-ignore
+                    const handle = await window.showSaveFilePicker({
+                        suggestedName: file.name
+                    });
+                    
                     const writable = await handle.createWritable();
                     const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
                     let url = `${baseUrl}/preview/${file.cid}?download=true`;
@@ -176,91 +167,25 @@ const handleDownload = async (file: any) => {
                         url += `&password=${encodeURIComponent(file.password)}`;
                     }
                     
-                    // We need to fetch as stream and pipe to writable
                     const response = await fetch(url);
                     if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                    if (!response.body) throw new Error("No response body");
                     
-                    const total = Number(response.headers.get('content-length')) || 0;
-                    let loaded = 0;
+                    // @ts-ignore
+                    await response.body.pipeTo(writable);
                     
-                    const reader = response.body.getReader();
-                    
-                    // Pump
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) break;
-                        loaded += value.length;
-                        if (total) taskStore.updateProgress(taskId, loaded, total);
-                        await writable.write(value);
-                    }
-                    
-                    await writable.close();
                     taskStore.completeTask(taskId);
-                    return; // Done
-                    
-                } catch (e: any) {
-                    console.error(e);
-                    taskStore.failTask(taskId, e.message);
-                    toastStore.error(`Download failed: ${e.message}`);
                     return;
                 }
-            }
-        } catch (err: any) {
-            // User cancelled picker or not supported
-            if (err.name === 'AbortError') return;
-            console.warn("FileSystemAccess API not supported or failed, falling back to default download", err);
+             } catch (err: any) {
+                 if (err.name === 'AbortError') {
+                     taskStore.removeTask(taskId);
+                     return;
+                 }
+                 console.warn("FileSystemAccess API failed, falling back to Blob", err);
+             }
         }
-    }
-
-    // Fallback / Default Download Logic (Browser default or Settings Path if we could control it)
-    // Note: In standard web, we CANNOT force a download path to 'settingsStore.downloadPath'.
-    // The browser always saves to its configured Downloads folder.
-    // The only way to save to a specific folder on Disk from Electron is to use the Main Process to handle download
-    // OR use the FileSystem Access API (as above).
-    
-    // IF we want to strictly follow "Save to settings path", we MUST send a request to Backend to download to disk
-    // (which we deprecated/disabled in favor of client-side tracking).
-    
-    // COMPROMISE:
-    // 1. If "Ask Path" is ON -> Try showSaveFilePicker (Client side save).
-    // 2. If "Ask Path" is OFF -> We want to save to `settings.downloadPath`.
-    //    Client-side JS cannot write to arbitrary path `C:\MyFiles`.
-    //    So we MUST use the Backend for this case IF we want to respect the path.
-    //    BUT we want progress tracking...
-    
-    // SOLUTION:
-    // Re-enable Backend Download for "Silent Save to Specific Path" scenario?
-    // OR: Use Electron IPC to download?
-    // Since we are in a rush and refactoring to Client Side download for Progress:
-    // We will stick to Client Side Download (Blob/Anchor) which saves to Browser Default Downloads.
-    // The "Settings Download Path" is effectively ignored in this mode unless we use Electron IPC.
-    
-    // However, the user asked to implement the logic.
-    // Let's implement the "Ask Path" using showSaveFilePicker as it fits the "Client Side" model well.
-    // For "Silent Save", we'll just do the Anchor click (Browser Default).
-    
-    // If settingsStore.downloadPath is set and "Ask" is false, we use the Backend to save silently
-    if (!settingsStore.askPath && settingsStore.downloadPath) {
-        const taskId = taskStore.addTask('download', file.name);
-        toastStore.success(`Download started for ${file.name}`);
         
-        try {
-            // Use backend to download
-            await api.post(`/files/${file.id}/download`, { password: file.password });
-            taskStore.completeTask(taskId);
-        } catch (e: any) {
-             console.error(e);
-             taskStore.failTask(taskId, e.message || 'Download failed');
-             toastStore.error(`Download failed: ${e.message}`);
-        }
-        return;
-    }
-    
-    const taskId = taskStore.addTask('download', file.name);
-    toastStore.success(`Download started for ${file.name}`);
-    
-    try {
+        // Fallback: Blob Download (Browser Default)
         let url = `/preview/${file.cid}?download=true`;
         if (file.password) {
             url += `&password=${encodeURIComponent(file.password)}`;
@@ -286,6 +211,7 @@ const handleDownload = async (file: any) => {
         window.URL.revokeObjectURL(downloadUrl);
         
         taskStore.completeTask(taskId);
+
     } catch (e: any) {
         console.error(e);
         taskStore.failTask(taskId, e.message || 'Download failed');

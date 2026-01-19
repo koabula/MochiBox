@@ -125,7 +125,7 @@ const close = () => {
             @click="handleCopy"
             class="w-full py-3 bg-nord-10 hover:bg-nord-9 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold rounded-xl transition-colors shadow-lg shadow-nord-10/20 flex items-center justify-center gap-2"
           >
-            <Copy class="w-4 h-4" /> Copy Share JSON
+            <Copy class="w-4 h-4" /> Copy Mochi Link
           </button>
       </div>
     </div>
