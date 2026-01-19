@@ -119,7 +119,7 @@ async function processTarget(target) {
     // In CI (GitHub Actions), Linux/Mac runners don't have PowerShell by default.
     // Since we are building for specific platform in release.yml, we should respect that context or handle cross-extraction better.
     // Better fix: Detect if we are on Linux/Mac but trying to extract zip using powershell.
-    if (process.platform !== 'win32' && isZip) {
+    if (process.platform !== 'win32' && target.ext === 'zip') {
         console.log(`Skipping ${target.platform} download on non-Windows host (cannot extract zip via powershell).`);
         return;
     }
