@@ -157,6 +157,7 @@ const handlePreview = (file: any, password?: string) => {
             return;
         }
         params.append('password', pw);
+        params.append('type', 'password');
         
         // Stateless fallback
         if (file.encryption_meta) {
@@ -168,6 +169,7 @@ const handlePreview = (file: any, password?: string) => {
             toastStore.error("Please unlock your account first");
             return;
         }
+        params.append('type', 'private');
         // Stateless fallback
         if (file.encryption_meta) {
             params.append('meta', file.encryption_meta);
@@ -241,6 +243,7 @@ const handleDownload = async (file: any, password?: string) => {
                     const params = new URLSearchParams();
                     if (pw) params.append('password', pw);
                     if (file.encryption_meta) params.append('meta', file.encryption_meta);
+                    if (file.encryption_type) params.append('type', file.encryption_type);
                     if (params.toString()) url += `&${params.toString()}`;
                     
                     const response = await fetch(url);
@@ -267,6 +270,7 @@ const handleDownload = async (file: any, password?: string) => {
         const params = new URLSearchParams();
         if (pw) params.append('password', pw);
         if (file.encryption_meta) params.append('meta', file.encryption_meta);
+        if (file.encryption_type) params.append('type', file.encryption_type);
         if (params.toString()) url += `&${params.toString()}`;
 
         const response = await api.get(url, {

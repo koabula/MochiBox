@@ -165,6 +165,9 @@ const handleDownload = async (file: any) => {
                     let url = `${baseUrl}/preview/${file.cid}?download=true`;
                     if (file.password) {
                         url += `&password=${encodeURIComponent(file.password)}`;
+                        url += `&type=password`;
+                    } else if (file.encryption_type) {
+                        url += `&type=${file.encryption_type}`;
                     }
                     
                     const response = await fetch(url);
@@ -189,6 +192,9 @@ const handleDownload = async (file: any) => {
         let url = `/preview/${file.cid}?download=true`;
         if (file.password) {
             url += `&password=${encodeURIComponent(file.password)}`;
+            url += `&type=password`;
+        } else if (file.encryption_type) {
+            url += `&type=${file.encryption_type}`;
         }
         
         const response = await api.get(url, {

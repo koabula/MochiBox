@@ -51,12 +51,18 @@ func (s *Server) handlePreview(c *gin.Context) {
         } else {
             // 3. Check URL Params (Stateless Fallback)
             metaParam := c.Query("meta")
+            typeParam := c.Query("type")
             if metaParam != "" {
                 encryptionMeta = metaParam
-                if c.Query("password") != "" {
-                    encryptionType = "password"
+                if typeParam != "" {
+                    encryptionType = typeParam
                 } else {
-                    encryptionType = "private" 
+                    // Legacy Fallback
+                    if c.Query("password") != "" {
+                        encryptionType = "password"
+                    } else {
+                        encryptionType = "private" 
+                    }
                 }
             }
         }
@@ -106,6 +112,10 @@ func (s *Server) handlePreview(c *gin.Context) {
                 return
             }
             reader = decReader
+            // Adjust size for IV
+            if size > 16 {
+                size -= 16
+            }
             
         } else if encryptionType == "private" {
             // Need user private key
@@ -133,6 +143,10 @@ func (s *Server) handlePreview(c *gin.Context) {
                 return
             }
             reader = decReader
+            // Adjust size for IV
+            if size > 16 {
+                size -= 16
+            }
         }
     }
 
