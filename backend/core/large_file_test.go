@@ -17,7 +17,7 @@ func TestAddGetFile_LargePlain(t *testing.T) {
 	}
 	defer os.RemoveAll(tempDir)
 
-	node, err := NewNode(tempDir)
+	node, err := NewNode(tempDir, "")
 	if err != nil {
 		t.Fatal(err)
 	}

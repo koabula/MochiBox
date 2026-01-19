@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { FileText, Download, Trash2, Eye, Share2, Pin, RefreshCcw, Lock, Globe, UserCheck, Copy, Check } from 'lucide-vue-next';
+import { FileText, Download, Trash2, Eye, Share2, Pin, RefreshCcw, Lock, Globe, UserCheck, Copy, Check, Folder } from 'lucide-vue-next';
 import PasswordInputModal from './PasswordInputModal.vue';
+import FolderPreviewModal from './FolderPreviewModal.vue';
 import { useToastStore } from '@/stores/toast';
 
 const props = defineProps<{
@@ -15,11 +16,18 @@ const emit = defineEmits(['preview', 'delete', 'share', 'download', 'clear-histo
 const toast = useToastStore();
 
 const showPasswordModal = ref(false);
+const showFolderModal = ref(false);
 const selectedFile = ref<any>(null);
 const actionType = ref<'preview' | 'download'>('preview');
 const copiedKey = ref<string | null>(null);
 
 const handleActionClick = (file: any, type: 'preview' | 'download') => {
+    if (type === 'preview' && (file.is_folder || file.mime_type === 'inode/directory')) {
+        selectedFile.value = file;
+        showFolderModal.value = true;
+        return;
+    }
+
     if (file.encryption_type === 'password' && !file.saved_password) {
         selectedFile.value = file;
         actionType.value = type;
@@ -102,7 +110,8 @@ const formatDate = (dateStr: string) => {
         <tr v-for="file in files" :key="file.id" class="hover:bg-nord-6 dark:hover:bg-nord-2 transition-colors">
           <td class="px-6 py-4 font-medium text-nord-1 dark:text-nord-6 flex items-center gap-3">
             <div class="p-2 bg-nord-5 dark:bg-nord-3 rounded-lg">
-              <FileText class="w-5 h-5 text-nord-10 dark:text-nord-8" />
+              <Folder v-if="file.is_folder || file.mime_type === 'inode/directory'" class="w-5 h-5 text-nord-10 dark:text-nord-8" />
+              <FileText v-else class="w-5 h-5 text-nord-10 dark:text-nord-8" />
             </div>
             {{ file.name }}
           </td>
@@ -136,7 +145,9 @@ const formatDate = (dateStr: string) => {
                   </div>
               </div>
           </td>
-          <td class="px-6 py-4 text-nord-3 dark:text-nord-4 truncate max-w-[150px]" :title="file.mime_type">{{ file.mime_type }}</td>
+          <td class="px-6 py-4 text-nord-3 dark:text-nord-4 truncate max-w-[150px]" :title="file.mime_type">
+              {{ (file.is_folder || file.mime_type === 'inode/directory') ? 'Folder' : file.mime_type }}
+          </td>
           <td class="px-6 py-4 text-nord-3 dark:text-nord-4">{{ formatDate(file.created_at) }}</td>
           <td class="px-6 py-4 text-right space-x-2 whitespace-nowrap">
              <button @click="handleActionClick(file, 'preview')" class="p-2 text-nord-3 hover:text-nord-10 dark:text-nord-4 dark:hover:text-nord-8 transition-colors" title="Preview">
@@ -168,6 +179,13 @@ const formatDate = (dateStr: string) => {
       :file-name="selectedFile?.name || ''"
       @close="showPasswordModal = false"
       @submit="handlePasswordSubmit"
+    />
+    <FolderPreviewModal
+      v-if="selectedFile"
+      :is-open="showFolderModal"
+      :cid="selectedFile.cid"
+      :name="selectedFile.name"
+      @close="showFolderModal = false"
     />
   </div>
 </template>

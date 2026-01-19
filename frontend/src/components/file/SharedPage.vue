@@ -9,6 +9,7 @@ import { useAccountStore } from '@/stores/account';
 import { storeToRefs } from 'pinia';
 import FileTable from '@/components/file/FileTable.vue';
 import SharedFileModal from '@/components/file/SharedFileModal.vue';
+import FolderPreviewModal from '@/components/file/FolderPreviewModal.vue';
 import api from '@/api';
 
 const sharedStore = useSharedStore();
@@ -21,6 +22,9 @@ const { history, loading } = storeToRefs(sharedStore);
 const sharedInput = ref('');
 const showSharedModal = ref(false);
 const sharedModalData = ref<any>(null);
+
+const showFolderModal = ref(false);
+const selectedFolder = ref<any>(null);
 
 onMounted(() => {
     sharedStore.fetchHistory();
@@ -140,6 +144,13 @@ const handleImportShared = async () => {
 };
 
 const handlePreview = (file: any, password?: string) => {
+    // Check if folder
+    if (file.mime_type === 'inode/directory' || file.is_folder) {
+        selectedFolder.value = file;
+        showFolderModal.value = true;
+        return;
+    }
+
     const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
     let url = `${baseUrl}/preview/${file.cid}`;
     const params = new URLSearchParams();
@@ -420,6 +431,14 @@ const onModalPin = () => {
             @preview="onModalPreview"
             @download="onModalDownload"
             @pin="onModalPin"
+        />
+
+        <FolderPreviewModal
+            v-if="selectedFolder"
+            :is-open="showFolderModal"
+            :cid="selectedFolder.cid"
+            :name="selectedFolder.name"
+            @close="showFolderModal = false"
         />
 
     </div>

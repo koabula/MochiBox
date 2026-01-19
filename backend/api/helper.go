@@ -51,6 +51,13 @@ func (s *Server) GetFileStream(ctx context.Context, cid string) (io.Reader, stri
 		}
 	}
 
+	// Check if contentType is directory (but now we have a stream, so it's a zip)
+	if contentType == "inode/directory" {
+		contentType = "application/zip"
+		// Size is unknown for zip stream, ensure it is 0
+		size = 0
+	}
+
 	return reader, contentType, size, nil
 }
 

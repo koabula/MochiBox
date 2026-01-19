@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { X, Upload, File as FileIcon, Lock, Globe, UserCheck } from 'lucide-vue-next';
+import { X, Upload, File as FileIcon, Lock, Globe, UserCheck, Folder } from 'lucide-vue-next';
 
 const props = defineProps<{
   isOpen: boolean
@@ -9,7 +9,9 @@ const props = defineProps<{
 const emit = defineEmits(['close', 'upload']);
 
 const fileInput = ref<HTMLInputElement | null>(null);
+const folderInput = ref<HTMLInputElement | null>(null);
 const selectedFile = ref<File | null>(null);
+const selectedFiles = ref<File[]>([]);
 const encryptionType = ref('public');
 const password = ref('');
 const receiverPubKey = ref('');
@@ -24,21 +26,55 @@ const handleFileSelect = (event: Event) => {
   const target = event.target as HTMLInputElement;
   if (target.files && target.files.length > 0) {
     selectedFile.value = target.files[0];
+    selectedFiles.value = [];
+  }
+};
+
+const handleFolderSelect = (event: Event) => {
+  const target = event.target as HTMLInputElement;
+  if (target.files && target.files.length > 0) {
+    selectedFiles.value = Array.from(target.files);
+    
+    // Create preview
+    const first = target.files[0];
+    const path = first.webkitRelativePath;
+    const name = path.split('/')[0] || 'Folder';
+    const totalSize = selectedFiles.value.reduce((acc, f) => acc + f.size, 0);
+    
+    // Mock file for display
+    selectedFile.value = {
+        name: name,
+        size: totalSize
+    } as File;
   }
 };
 
 const handleDrop = (event: DragEvent) => {
   event.preventDefault();
+  if (event.dataTransfer?.items) {
+      // Check for folder drop? Browsers make this hard without FileSystem API.
+      // Standard drop gives files. If a folder is dropped, Chrome gives the files inside?
+      // No, usually it gives the folder as a File with size 0 or type "".
+      // Handling drag-and-drop folders is complex (webkitGetAsEntry).
+      // For now, let's assume standard file drop or use the button for folders.
+      // If user drops multiple files, we can handle that?
+      // MochiBox current MVP handles single file drop.
+      // Let's keep it simple for now.
+  }
+  
   if (event.dataTransfer?.files && event.dataTransfer.files.length > 0) {
     selectedFile.value = event.dataTransfer.files[0];
+    selectedFiles.value = [];
   }
 };
 
 const handleSubmit = () => {
   if (!selectedFile.value) return;
-  // Ensure we pass the values correctly
+  
+  const payload = selectedFiles.value.length > 0 ? selectedFiles.value : selectedFile.value;
+  
   emit('upload', { 
-      file: selectedFile.value,
+      file: payload,
       options: {
           encryptionType: encryptionType.value,
           password: password.value,
@@ -46,13 +82,11 @@ const handleSubmit = () => {
           savePassword: savePassword.value
       }
   });
-  // Close happens after upload starts in parent, but we can reset form
-  // reset(); // Don't reset immediately, wait for close?
-  // Actually, parent closes modal on success.
 };
 
 const reset = () => {
   selectedFile.value = null;
+  selectedFiles.value = [];
   encryptionType.value = 'public';
   password.value = '';
   receiverPubKey.value = '';
@@ -83,17 +117,29 @@ const close = () => {
           v-if="!selectedFile"
           @dragover.prevent
           @drop="handleDrop"
-          @click="fileInput?.click()"
-          class="border-2 border-dashed border-nord-4 dark:border-nord-3 rounded-xl p-8 flex flex-col items-center justify-center gap-3 cursor-pointer hover:border-nord-10 dark:hover:border-nord-8 hover:bg-nord-6 dark:hover:bg-nord-2 transition-all"
+          class="border-2 border-dashed border-nord-4 dark:border-nord-3 rounded-xl p-8 flex flex-col items-center justify-center gap-3 hover:border-nord-10 dark:hover:border-nord-8 hover:bg-nord-6 dark:hover:bg-nord-2 transition-all"
         >
           <div class="p-3 bg-nord-5 dark:bg-nord-3 rounded-full">
             <Upload class="w-6 h-6 text-nord-10 dark:text-nord-8" />
           </div>
           <div class="text-center">
-            <p class="font-medium text-nord-1 dark:text-nord-6">Click or drag file to upload</p>
+            <p class="font-medium text-nord-1 dark:text-nord-6">Drag file here or select</p>
             <p class="text-xs text-nord-3 dark:text-nord-4 mt-1">Any file type supported</p>
           </div>
+          
+          <div class="flex gap-3 mt-2">
+            <button @click.stop="fileInput?.click()" class="px-4 py-2 bg-nord-4 dark:bg-nord-3 hover:bg-nord-5 dark:hover:bg-nord-2 rounded-lg text-sm font-bold text-nord-1 dark:text-nord-6 transition-colors flex items-center gap-2">
+                <FileIcon class="w-4 h-4" />
+                Select File
+            </button>
+            <button @click.stop="folderInput?.click()" class="px-4 py-2 bg-nord-4 dark:bg-nord-3 hover:bg-nord-5 dark:hover:bg-nord-2 rounded-lg text-sm font-bold text-nord-1 dark:text-nord-6 transition-colors flex items-center gap-2">
+                <Folder class="w-4 h-4" />
+                Select Folder
+            </button>
+          </div>
+          
           <input ref="fileInput" type="file" class="hidden" @change="handleFileSelect" />
+          <input ref="folderInput" type="file" webkitdirectory class="hidden" @change="handleFolderSelect" />
         </div>
 
         <!-- Selected File Preview -->

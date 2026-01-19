@@ -155,6 +155,11 @@ func (s *Server) handlePreview(c *gin.Context) {
 	buffer := make([]byte, 512)
 	var n int
 
+	// Allow overriding filename via query param (e.g. for folder preview downloads)
+	if nameParam := c.Query("filename"); nameParam != "" {
+		filename = nameParam
+	}
+
 	if contentType == "" || contentType == "application/octet-stream" {
 		shouldSniff := c.Query("download") != "true"
 		if shouldSniff {
@@ -180,6 +185,11 @@ func (s *Server) handlePreview(c *gin.Context) {
 			}
 		}
 	}
+    
+    // Force .zip for zip streams if not present
+    if contentType == "application/zip" && !strings.HasSuffix(strings.ToLower(filename), ".zip") {
+        filename += ".zip"
+    }
 	
 	// Set Content-Length ONLY if known (> 0)
 	if size > 0 {
@@ -188,7 +198,11 @@ func (s *Server) handlePreview(c *gin.Context) {
 	
 	// Disposition
 	if c.Query("download") == "true" {
-		c.Header("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": filename}))
+		// Use fmt.Sprintf for filename to handle UTF-8 if needed, but simple ASCII is safer for now.
+		// Or use built-in safe header setting.
+		// mime.FormatMediaType sometimes is tricky with filenames.
+		// Let's manually set it to ensure browser sees it.
+		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 	} else {
 		c.Header("Content-Disposition", "inline")
 	}

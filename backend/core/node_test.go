@@ -2,6 +2,7 @@ package core
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"testing"
 
@@ -9,19 +10,19 @@ import (
 )
 
 func TestAddGetFile_Plain(t *testing.T) {
-	n, err := NewNode(t.TempDir())
+	n, err := NewNode(t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("NewNode: %v", err)
 	}
 	defer n.Stop()
 
 	plain := []byte("hello mochibox")
-	c, err := n.AddFile(t.Context(), bytes.NewReader(plain))
+	c, err := n.AddFile(context.Background(), bytes.NewReader(plain))
 	if err != nil {
 		t.Fatalf("AddFile: %v", err)
 	}
 
-	r, err := n.GetFile(t.Context(), c)
+	r, err := n.GetFile(context.Background(), c)
 	if err != nil {
 		t.Fatalf("GetFile: %v", err)
 	}
@@ -36,7 +37,7 @@ func TestAddGetFile_Plain(t *testing.T) {
 }
 
 func TestAddGetFile_SymmetricEncryptedStream(t *testing.T) {
-	n, err := NewNode(t.TempDir())
+	n, err := NewNode(t.TempDir(), "")
 	if err != nil {
 		t.Fatalf("NewNode: %v", err)
 	}
@@ -46,17 +47,17 @@ func TestAddGetFile_SymmetricEncryptedStream(t *testing.T) {
 	salt := bytes.Repeat([]byte{0x01}, 16)
 	key := crypto.DeriveKey("pw", salt)
 
-	encReader, err := crypto.EncryptedReader(key, bytes.NewReader(plain))
+	encReader, err := crypto.NewAESCTRReader(bytes.NewReader(plain), key)
 	if err != nil {
-		t.Fatalf("EncryptedReader: %v", err)
+		t.Fatalf("NewAESCTRReader: %v", err)
 	}
 
-	c, err := n.AddFile(t.Context(), encReader)
+	c, err := n.AddFile(context.Background(), encReader)
 	if err != nil {
 		t.Fatalf("AddFile(enc): %v", err)
 	}
 
-	encStream, err := n.GetFile(t.Context(), c)
+	encStream, err := n.GetFile(context.Background(), c)
 	if err != nil {
 		t.Fatalf("GetFile(enc): %v", err)
 	}
@@ -66,9 +67,9 @@ func TestAddGetFile_SymmetricEncryptedStream(t *testing.T) {
 		t.Fatalf("ReadAll(enc): %v", err)
 	}
 
-	decReader, err := crypto.DecryptedReader(key, bytes.NewReader(encBytes))
+	decReader, err := crypto.NewAESCTRDecrypter(bytes.NewReader(encBytes), key)
 	if err != nil {
-		t.Fatalf("DecryptedReader: %v", err)
+		t.Fatalf("NewAESCTRDecrypter: %v", err)
 	}
 
 	got, err := io.ReadAll(decReader)

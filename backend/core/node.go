@@ -1,9 +1,11 @@
 package core
 
 import (
+	"archive/zip"
 	"context"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	// files "github.com/ipfs/go-ipfs-files"
@@ -104,6 +106,132 @@ func (n *MochiNode) AddFile(ctx context.Context, reader io.Reader) (string, erro
 	return p.RootCid().String(), nil
 }
 
+type FileEntry struct {
+	Path   string
+	Reader io.Reader
+}
+
+func (n *MochiNode) AddDirectory(ctx context.Context, entries []FileEntry) (string, error) {
+	if len(entries) == 0 {
+		return "", fmt.Errorf("no files in directory")
+	}
+
+	rootNode, err := buildTree(entries)
+	if err != nil {
+		return "", err
+	}
+
+	p, err := n.IPFS.Unixfs().Add(ctx, rootNode)
+	if err != nil {
+		return "", fmt.Errorf("failed to add directory: %w", err)
+	}
+
+	return p.RootCid().String(), nil
+}
+
+func buildTree(entries []FileEntry) (files.Node, error) {
+	subs := make(map[string][]FileEntry)
+	filesInDir := make(map[string]io.Reader)
+
+	for _, e := range entries {
+		parts := strings.SplitN(e.Path, "/", 2)
+		if len(parts) == 1 {
+			filesInDir[parts[0]] = e.Reader
+		} else {
+			dirName := parts[0]
+			restPath := parts[1]
+			subs[dirName] = append(subs[dirName], FileEntry{Path: restPath, Reader: e.Reader})
+		}
+	}
+
+	var dirEntries []files.DirEntry
+
+	for name, reader := range filesInDir {
+		dirEntries = append(dirEntries, files.FileEntry(name, files.NewReaderFile(reader)))
+	}
+
+	for name, subEntries := range subs {
+		subNode, err := buildTree(subEntries)
+		if err != nil {
+			return nil, err
+		}
+		dirEntries = append(dirEntries, files.FileEntry(name, subNode))
+	}
+
+	sort.Slice(dirEntries, func(i, j int) bool {
+		return dirEntries[i].Name() < dirEntries[j].Name()
+	})
+
+	return files.NewSliceDirectory(dirEntries), nil
+}
+
+type DirItem struct {
+	Name string `json:"name"`
+	CID  string `json:"cid"`
+	Size int64  `json:"size"`
+	Type string `json:"type"` // "file" or "dir"
+}
+
+func (n *MochiNode) ListDirectory(ctx context.Context, cidStr string) ([]DirItem, error) {
+	cidPath, err := path.NewPath("/ipfs/" + cidStr)
+	if err != nil {
+		return nil, err
+	}
+	
+	node, err := n.IPFS.Unixfs().Get(ctx, cidPath)
+	if err != nil {
+		return nil, err
+	}
+	
+	dir, ok := node.(files.Directory)
+	if !ok {
+		return nil, fmt.Errorf("node is not a directory")
+	}
+
+	var items []DirItem
+	it := dir.Entries()
+	for it.Next() {
+		name := it.Name()
+		subNode := it.Node()
+		
+		item := DirItem{
+			Name: name,
+			Type: "file",
+		}
+		
+		if f, ok := subNode.(files.File); ok {
+			item.Size, _ = f.Size()
+		} else if _, ok := subNode.(files.Directory); ok {
+			item.Type = "dir"
+		}
+		
+		// Resolve CID for sub-item
+		// Construct path: /ipfs/<RootCID>/<Name>
+		subPathStr := "/ipfs/" + cidStr + "/" + name
+		subPath, err := path.NewPath(subPathStr)
+		if err == nil {
+			// Use ResolvePath to get the CID
+			// Note: This adds overhead but is necessary for navigation
+			// n.IPFS is iface.CoreAPI
+			// It seems in this version it returns 3 values? (resolved, remainder, error)? or similar?
+			// Let's try to ignore the second return value.
+			resolved, _, err := n.IPFS.ResolvePath(ctx, subPath)
+			if err == nil {
+				// resolved is likely path.ImmutablePath or similar which might use RootCid() or similar?
+				// Error says: type "github.com/ipfs/boxo/path".ImmutablePath has no field or method Cid
+				// It probably has RootCid()
+				item.CID = resolved.RootCid().String()
+			} else {
+				fmt.Printf("Warning: Failed to resolve subpath %s: %v\n", subPathStr, err)
+			}
+		}
+		
+		items = append(items, item)
+	}
+	
+	return items, nil
+}
+
 // Unpin removes a pin for the given CID
 func (n *MochiNode) Unpin(ctx context.Context, cidStr string) error {
 	cidPath, err := path.NewPath("/ipfs/" + cidStr)
@@ -185,7 +313,61 @@ func (n *MochiNode) GetFile(ctx context.Context, cidStr string) (io.Reader, erro
 		return f, nil
 	}
 	
-	return nil, fmt.Errorf("node is not a file")
+	if d, ok := node.(files.Directory); ok {
+		// It's a directory, return a ZIP stream
+		return zipDirectory(ctx, d)
+	}
+
+	return nil, fmt.Errorf("node is not a file or directory")
+}
+
+func zipDirectory(ctx context.Context, dir files.Directory) (io.Reader, error) {
+	pr, pw := io.Pipe()
+
+	go func() {
+		defer pw.Close()
+		
+		zw := zip.NewWriter(pw)
+		defer zw.Close()
+
+		// Helper to walk the directory
+		var walk func(d files.Directory, prefix string) error
+		walk = func(d files.Directory, prefix string) error {
+			it := d.Entries()
+			for it.Next() {
+				name := it.Name()
+				node := it.Node()
+				
+				currPath := name
+				if prefix != "" {
+					currPath = prefix + "/" + name
+				}
+
+				if f, ok := node.(files.File); ok {
+					w, err := zw.Create(currPath)
+					if err != nil {
+						return err
+					}
+					if _, err := io.Copy(w, f); err != nil {
+						return err
+					}
+					f.Close()
+				} else if subDir, ok := node.(files.Directory); ok {
+					if err := walk(subDir, currPath); err != nil {
+						return err
+					}
+					subDir.Close()
+				}
+			}
+			return it.Err()
+		}
+
+		if err := walk(dir, ""); err != nil {
+			pw.CloseWithError(err)
+		}
+	}()
+
+	return pr, nil
 }
 
 func (n *MochiNode) GetFileSize(ctx context.Context, cidStr string) (int64, error) {

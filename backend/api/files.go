@@ -12,9 +12,11 @@ import (
 	"encoding/hex"
 	"encoding/base64"
 	"crypto/rand"
+	"archive/zip"
 
 	"mochibox-core/db"
 	"mochibox-core/crypto"
+	"mochibox-core/core"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -38,6 +40,7 @@ func (s *Server) registerFileRoutes(db *gorm.DB) {
 		api.POST("/sync", func(c *gin.Context) {
 			s.handleSyncFiles(c, db)
 		})
+        api.GET("/:cid/ls", s.handleListDirectory)
 	}
 }
 
@@ -91,10 +94,15 @@ func (s *Server) handleDownloadToDisk(c *gin.Context) {
 
     dstPath := ensureUniquePath(filepath.Join(saveDir, file.Name))
     
-    reader, _, _, err := s.GetFileStream(c.Request.Context(), file.CID)
+    reader, contentType, _, err := s.GetFileStream(c.Request.Context(), file.CID)
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
         return
+    }
+
+    // Fix filename for zip streams
+    if contentType == "application/zip" && !strings.HasSuffix(strings.ToLower(dstPath), ".zip") {
+        dstPath += ".zip"
     }
 
     // Decryption Logic
@@ -244,10 +252,15 @@ func (s *Server) handleDownloadShared(c *gin.Context) {
     
     dstPath := ensureUniquePath(filepath.Join(saveDir, filename))
     
-    reader, _, _, err := s.GetFileStream(c.Request.Context(), req.CID)
+    reader, contentType, _, err := s.GetFileStream(c.Request.Context(), req.CID)
     if err != nil {
         c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
         return
+    }
+    
+    // Fix filename for zip streams
+    if contentType == "application/zip" && !strings.HasSuffix(strings.ToLower(dstPath), ".zip") {
+        dstPath += ".zip"
     }
     
     // Decryption Logic (Replicated from handlePreview/gateway.go)
@@ -314,136 +327,253 @@ func (s *Server) handleDownloadShared(c *gin.Context) {
 
 func (s *Server) handleUpload(c *gin.Context, database *gorm.DB) {
 	// 1. Parse Multipart Form
-	fileHeader, err := c.FormFile("file")
+	form, err := c.MultipartForm()
 	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid form data"})
+		return
+	}
+
+	files := form.File["file"]
+	if len(files) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No file uploaded"})
 		return
 	}
 
-	srcFile, err := fileHeader.Open()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open file"})
-		return
-	}
-	defer srcFile.Close()
-
-	var reader io.Reader = srcFile
-	
-	// Encryption Logic
+	paths := form.Value["paths[]"]
 	encType := c.PostForm("encryption_type")
 	if encType == "" { encType = "public" }
-    
-    savePassword := c.PostForm("save_password") == "true"
-    var savedPassword string
-    var recipientPubKey string
 	
+	isFolder := len(paths) > 0
+
+	var reader io.Reader
+	var cid string
+	var fileName string
+	var fileSize int64
+	var mimeType string
 	var encryptionMeta string
-	mimeType := fileHeader.Header.Get("Content-Type")
-	if encType == "public" && (mimeType == "" || mimeType == "application/octet-stream") {
-		buffer := make([]byte, 512)
-		n, _ := reader.Read(buffer)
-		if n > 0 {
-			mimeType = http.DetectContentType(buffer[:n])
-			reader = io.MultiReader(bytes.NewReader(buffer[:n]), reader)
+	var savedPassword string
+	var recipientPubKey string
+	var isFolderDB bool
+
+	// Determine Folder Name (Common Prefix)
+	folderName := "Folder"
+	if isFolder && len(paths) > 0 {
+		parts := strings.Split(paths[0], "/")
+		if len(parts) > 1 {
+			folderName = parts[0]
 		}
 	}
-	
-	if encType == "password" {
-		password := c.PostForm("password")
-		if password == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Password required"})
-			return
+
+	if isFolder && encType == "public" {
+		// Public Folder -> IPFS Directory
+		var entries []core.FileEntry
+		
+		for i, fileHeader := range files {
+			f, err := fileHeader.Open()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open file part"})
+				return
+			}
+			defer f.Close()
+
+			// Determine relative path
+			relPath := fileHeader.Filename
+			if i < len(paths) {
+				p := paths[i]
+				p = strings.TrimPrefix(p, folderName+"/")
+				relPath = p
+			}
+			
+			entries = append(entries, core.FileEntry{Path: relPath, Reader: f})
+			fileSize += fileHeader.Size
 		}
 
-        if savePassword {
-            if s.AccountManager.Wallet != nil {
-                // Encrypt password with Account Public Key
-                curvePub, _ := crypto.Ed25519PublicKeyToCurve25519(s.AccountManager.Wallet.PublicKey)
-                encPass, err := crypto.EncryptSessionKey(curvePub, []byte(password))
-                if err == nil {
-                    savedPassword = base64.StdEncoding.EncodeToString(encPass)
-                }
-            }
-        }
-		
-		salt, err := crypto.GenerateSalt(16)
+		cid, err = s.Node.AddDirectory(c.Request.Context(), entries)
 		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate salt"})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("IPFS Add Directory failed: %v", err)})
 			return
 		}
 		
-		key := crypto.DeriveKey(password, salt)
-		r, err := crypto.NewAESCTRReader(reader, key)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Encryption init failed"})
-			return
-		}
-		
-		// IMPORTANT: Use the wrapper directly!
-		reader = r
-		encryptionMeta = hex.EncodeToString(salt)
-		
-	} else if encType == "private" {
-		receiverPubHex := c.PostForm("receiver_pub_key")
-		if receiverPubHex == "" {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Receiver Public Key required"})
-			return
-		}
-        recipientPubKey = receiverPubHex
-		
-		edPub, err := hex.DecodeString(receiverPubHex)
-		if err != nil || len(edPub) != 32 {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Public Key"})
-			return
-		}
-		
-		curvePub, err := crypto.Ed25519PublicKeyToCurve25519(edPub)
-		if err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to convert key: " + err.Error()})
-			return
-		}
-		
-		sessionKey := make([]byte, 32)
-		if _, err := rand.Read(sessionKey); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "RNG failed"})
-			return
-		}
-		
-		r, err := crypto.NewAESCTRReader(reader, sessionKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Encryption init failed"})
-			return
-		}
-		
-		// IMPORTANT: Use the wrapper directly!
-		reader = r
-		
-		encKey, err := crypto.EncryptSessionKey(curvePub, sessionKey)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt session key"})
-			return
-		}
-		
-		encryptionMeta = base64.StdEncoding.EncodeToString(encKey)
-	}
+		fileName = folderName
+		mimeType = "inode/directory"
+		isFolderDB = true
 
-	// 2. Add to IPFS
-	cid, err := s.Node.AddFile(c.Request.Context(), reader)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("IPFS Add failed: %v", err)})
-		return
+	} else {
+		// Single File OR Encrypted Folder (Zip)
+		
+		if isFolder {
+			// Encrypted Folder -> Zip
+			tmpFile, err := os.CreateTemp("", "mochi-upload-*.zip")
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create temp zip"})
+				return
+			}
+			defer os.Remove(tmpFile.Name())
+			defer tmpFile.Close()
+
+			zw := zip.NewWriter(tmpFile)
+			for i, fileHeader := range files {
+				f, err := fileHeader.Open()
+				if err != nil {
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open file part"})
+					return
+				}
+				
+				p := fileHeader.Filename
+				if i < len(paths) { p = paths[i] }
+				
+				w, err := zw.Create(p)
+				if err != nil {
+					f.Close()
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to add to zip"})
+					return
+				}
+				if _, err := io.Copy(w, f); err != nil {
+					f.Close()
+					c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to write zip content"})
+					return
+				}
+				f.Close()
+			}
+			if err := zw.Close(); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to finalize zip"})
+				return
+			}
+
+			if _, err := tmpFile.Seek(0, 0); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reset temp zip"})
+				return
+			}
+			stat, _ := tmpFile.Stat()
+			
+			reader = tmpFile
+			fileSize = stat.Size()
+			fileName = folderName + ".zip"
+			mimeType = "application/zip"
+			isFolderDB = false
+			
+		} else {
+			// Single File
+			fileHeader := files[0]
+			srcFile, err := fileHeader.Open()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to open file"})
+				return
+			}
+			defer srcFile.Close()
+			
+			reader = srcFile
+			fileName = fileHeader.Filename
+			fileSize = fileHeader.Size
+			mimeType = fileHeader.Header.Get("Content-Type")
+			
+			if encType == "public" && (mimeType == "" || mimeType == "application/octet-stream") {
+				buffer := make([]byte, 512)
+				n, _ := reader.Read(buffer)
+				if n > 0 {
+					mimeType = http.DetectContentType(buffer[:n])
+					reader = io.MultiReader(bytes.NewReader(buffer[:n]), reader)
+				}
+			}
+		}
+
+		// Encryption Logic
+		savePassword := c.PostForm("save_password") == "true"
+		
+		if encType == "password" {
+			password := c.PostForm("password")
+			if password == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Password required"})
+				return
+			}
+
+			if savePassword {
+				if s.AccountManager.Wallet != nil {
+					curvePub, _ := crypto.Ed25519PublicKeyToCurve25519(s.AccountManager.Wallet.PublicKey)
+					encPass, err := crypto.EncryptSessionKey(curvePub, []byte(password))
+					if err == nil {
+						savedPassword = base64.StdEncoding.EncodeToString(encPass)
+					}
+				}
+			}
+			
+			salt, err := crypto.GenerateSalt(16)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate salt"})
+				return
+			}
+			
+			key := crypto.DeriveKey(password, salt)
+			r, err := crypto.NewAESCTRReader(reader, key)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Encryption init failed"})
+				return
+			}
+			
+			reader = r
+			encryptionMeta = hex.EncodeToString(salt)
+			
+		} else if encType == "private" {
+			receiverPubHex := c.PostForm("receiver_pub_key")
+			if receiverPubHex == "" {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Receiver Public Key required"})
+				return
+			}
+			recipientPubKey = receiverPubHex
+			
+			edPub, err := hex.DecodeString(receiverPubHex)
+			if err != nil || len(edPub) != 32 {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid Public Key"})
+				return
+			}
+			
+			curvePub, err := crypto.Ed25519PublicKeyToCurve25519(edPub)
+			if err != nil {
+				c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to convert key: " + err.Error()})
+				return
+			}
+			
+			sessionKey := make([]byte, 32)
+			if _, err := rand.Read(sessionKey); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "RNG failed"})
+				return
+			}
+			
+			r, err := crypto.NewAESCTRReader(reader, sessionKey)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Encryption init failed"})
+				return
+			}
+			
+			reader = r
+			
+			encKey, err := crypto.EncryptSessionKey(curvePub, sessionKey)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to encrypt session key"})
+				return
+			}
+			
+			encryptionMeta = base64.StdEncoding.EncodeToString(encKey)
+		}
+
+		cid, err = s.Node.AddFile(c.Request.Context(), reader)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("IPFS Add failed: %v", err)})
+			return
+		}
 	}
 
 	// 3. Save Metadata to DB
 	newFile := db.File{
 		CID:            cid,
-		Name:           fileHeader.Filename,
-		Size:           fileHeader.Size,
+		Name:           fileName,
+		Size:           fileSize,
 		MimeType:       mimeType,
 		EncryptionType: encType,
 		EncryptionMeta: encryptionMeta,
-        SavedPassword:  savedPassword,
-        RecipientPubKey: recipientPubKey,
+		SavedPassword:  savedPassword,
+		RecipientPubKey: recipientPubKey,
+		IsFolder:       isFolderDB,
 		CreatedAt:      time.Now(),
 	}
 
@@ -524,4 +654,16 @@ func (s *Server) handleSyncFiles(c *gin.Context, database *gorm.DB) {
 		"total_pins": len(pins),
 		"added":      addedCount,
 	})
+}
+
+func (s *Server) handleListDirectory(c *gin.Context) {
+	cid := c.Param("cid")
+	
+	items, err := s.Node.ListDirectory(c.Request.Context(), cid)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to list directory: " + err.Error()})
+		return
+	}
+	
+	c.JSON(http.StatusOK, items)
 }

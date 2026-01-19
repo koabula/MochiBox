@@ -3,7 +3,7 @@ import { ref } from 'vue';
 import api from '@/api';
 import { useTaskStore } from './tasks';
 
-export interface File {
+export interface FileItem {
   id: number;
   cid: string;
   name: string;
@@ -12,11 +12,12 @@ export interface File {
   encryption_type: string;
   saved_password?: string;
   recipient_pub_key?: string;
+  is_folder: boolean;
   created_at: string;
 }
 
 export const useFileStore = defineStore('files', () => {
-  const files = ref<File[]>([]);
+  const files = ref<FileItem[]>([]);
   const loading = ref(false);
   const uploading = ref(false);
 
@@ -32,14 +33,31 @@ export const useFileStore = defineStore('files', () => {
     }
   }
 
-  async function uploadFile(file: File, options: { encryptionType: string, password?: string, receiverPubKey?: string, savePassword?: boolean } = { encryptionType: 'public' }) {
+  async function uploadFile(input: File | File[], options: { encryptionType: string, password?: string, receiverPubKey?: string, savePassword?: boolean } = { encryptionType: 'public' }) {
     const taskStore = useTaskStore();
-    const taskId = taskStore.addTask('upload', file.name);
     
-    // uploading.value = true; // No longer block UI
-    
+    let name = '';
     const formData = new FormData();
-    formData.append('file', file as any);
+
+    if (Array.isArray(input)) {
+        if (input.length === 0) return;
+        // Folder
+        // Try to get folder name from first file path
+        const firstPath = input[0].webkitRelativePath;
+        const parts = firstPath.split('/');
+        name = parts.length > 1 ? parts[0] : 'Folder';
+        
+        for (const f of input) {
+            formData.append('file', f);
+            formData.append('paths[]', f.webkitRelativePath);
+        }
+    } else {
+        name = input.name;
+        formData.append('file', input);
+    }
+
+    const taskId = taskStore.addTask('upload', name);
+    
     formData.append('encryption_type', options.encryptionType);
     if (options.password) formData.append('password', options.password);
     if (options.receiverPubKey) formData.append('receiver_pub_key', options.receiverPubKey);

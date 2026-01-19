@@ -17,6 +17,7 @@ type File struct {
 	EncryptionMeta  string         `json:"encryption_meta"` // salt (hex) or encrypted_key (base64)
 	SavedPassword   string         `json:"saved_password"`  // Encrypted password (by Account Public Key)
 	RecipientPubKey string         `json:"recipient_pub_key"` // Receiver Public Key (Hex)
+	IsFolder        bool           `json:"is_folder"`         // Is directory (Public) or Zip (Encrypted)
 	CreatedAt       time.Time      `json:"created_at"`
 }
 
