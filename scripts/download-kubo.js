@@ -114,6 +114,16 @@ async function processTarget(target) {
         return;
     }
 
+    // Skip if not on Windows and target is zip/Windows (avoid powershell dependency on linux/mac)
+    // Actually, simply check if we have the tools to extract.
+    // In CI (GitHub Actions), Linux/Mac runners don't have PowerShell by default.
+    // Since we are building for specific platform in release.yml, we should respect that context or handle cross-extraction better.
+    // Better fix: Detect if we are on Linux/Mac but trying to extract zip using powershell.
+    if (process.platform !== 'win32' && isZip) {
+        console.log(`Skipping ${target.platform} download on non-Windows host (cannot extract zip via powershell).`);
+        return;
+    }
+    
     await downloadFile(url, dest);
     extractAndMove(dest, targetDir, target.binary, target.ext === 'zip');
 }
