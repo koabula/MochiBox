@@ -33,6 +33,10 @@ jobs:
           go-version: '1.21'
           cache-dependency-path: backend/go.sum
 
+      - name: Force Clean Install (Fix Cross-Platform Native Deps)
+        shell: bash
+        run: rm -f package-lock.json
+
       - name: Install Dependencies
         run: npm install
 
