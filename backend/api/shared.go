@@ -102,6 +102,28 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 				results[i] = connectResult{Addr: addr, OK: false, Error: err.Error()}
 				return
 			}
+			// Success: Try to add to Peering (Protection)
+			// We fire and forget this protection attempt
+			go func(a string) {
+				// Use a longer timeout for peering add if needed
+				pCtx, pCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer pCancel()
+				
+				// 1. Add to Peering (High Priority Protection)
+				if err := s.IpfsManager.AddPeering(pCtx, a); err != nil {
+					fmt.Printf("Warning: Failed to add peer to peering list: %v\n", err)
+					// Fallback: Try Connect/PeeringAdd via Node if CLI fails
+					s.Node.PeeringAdd(pCtx, a)
+				}
+				
+				// 2. Warmup: Send a want for the root block to trigger bitswap session establishment
+				// We don't need to wait for the result, just sending the want is enough.
+				// However, since we don't have the CID here in the connect request easily accessible (it's generic connect),
+				// we skip specific CID warmup. 
+				// The user will click Preview/Download which triggers the fetch.
+				// With Peering, the connection should stay alive and robust.
+			}(addr)
+			
 			results[i] = connectResult{Addr: addr, OK: true}
 		}(i, addr)
 	}

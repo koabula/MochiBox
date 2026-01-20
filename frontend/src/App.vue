@@ -165,46 +165,29 @@ const handleDownload = async (file: any) => {
              return;
         }
 
-        // Strategy A: Frontend Download
+        // Strategy A: Frontend Download (Interactive)
+        let fileHandle = null;
+        
         // Try File System Access API first if "Ask Path" is enabled
         if (settingsStore.askPath) {
              try {
                 // @ts-ignore
                 if (window.showSaveFilePicker) {
                     // @ts-ignore
-                    const handle = await window.showSaveFilePicker({
+                    fileHandle = await window.showSaveFilePicker({
                         suggestedName: file.name
                     });
-                    
-                    const writable = await handle.createWritable();
-                    const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
-                    let url = `${baseUrl}/preview/${file.cid}?download=true`;
-                    if (file.password) {
-                        url += `&password=${encodeURIComponent(file.password)}`;
-                        url += `&type=password`;
-                    } else if (file.encryption_type) {
-                        url += `&type=${file.encryption_type}`;
-                    }
-                    
-                    const response = await fetch(url);
-                    if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-                    
-                    // @ts-ignore
-                    await response.body.pipeTo(writable);
-                    
-                    taskStore.completeTask(taskId);
-                    return;
                 }
              } catch (err: any) {
                  if (err.name === 'AbortError') {
                      taskStore.removeTask(taskId);
                      return;
                  }
-                 console.warn("FileSystemAccess API failed, falling back to Blob", err);
+                 console.warn("FileSystemAccess API failed/cancelled, falling back to Blob", err);
              }
         }
         
-        // Fallback: Blob Download (Browser Default)
+        // Construct URL
         let url = `/preview/${file.cid}?download=true`;
         if (file.password) {
             url += `&password=${encodeURIComponent(file.password)}`;
@@ -213,26 +196,9 @@ const handleDownload = async (file: any) => {
             url += `&type=${file.encryption_type}`;
         }
         
-        const response = await api.get(url, {
-            responseType: 'blob',
-            onDownloadProgress: (progressEvent) => {
-                if (progressEvent.total) {
-                    taskStore.updateProgress(taskId, progressEvent.loaded, progressEvent.total);
-                }
-            }
-        });
-        
-        const blob = new Blob([response.data], { type: response.headers['content-type'] });
-        const downloadUrl = window.URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = downloadUrl;
-        link.download = file.name;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(downloadUrl);
-        
-        taskStore.completeTask(taskId);
+        // Delegate to Task Store
+        // This handles: Fetching, Progress, Speed, Pause/Resume, Writing (Disk or Blob)
+        taskStore.startDownload(url, file.name, fileHandle, taskId);
 
     } catch (e: any) {
         console.error(e);

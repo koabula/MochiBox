@@ -129,8 +129,9 @@ func (m *IpfsManager) ConfigRepo() error {
 		
 		// Optimization: Connection Manager
 		// Lower watermark for client usage to save resources
-		{"Swarm.ConnMgr.LowWater", "50"},
-		{"Swarm.ConnMgr.HighWater", "300"},
+		// Update: Increased watermarks to maintain better connectivity for p2p transfers
+		{"Swarm.ConnMgr.LowWater", "100"},
+		{"Swarm.ConnMgr.HighWater", "600"},
 		
 		// Optimization: Relay Client & Transports
 		{"Swarm.RelayClient.Enabled", "true"},
@@ -148,6 +149,28 @@ func (m *IpfsManager) ConfigRepo() error {
 			return fmt.Errorf("config %s failed: %v, out: %s", cfg[0], err, string(out))
 		}
 	}
+	return nil
+}
+
+// AddPeering adds a peer to the peering subsystem via CLI
+// This ensures the peer is protected from connection manager trimming and reconnects are attempted.
+func (m *IpfsManager) AddPeering(ctx context.Context, multiaddr string) error {
+	if m.BinPath == "" {
+		return fmt.Errorf("ipfs binary not found")
+	}
+
+	// ipfs swarm peering add <multiaddr>
+	cmd := exec.CommandContext(ctx, m.BinPath, "swarm", "peering", "add", multiaddr)
+	cmd.Env = append(os.Environ(), "IPFS_PATH="+m.DataDir)
+	
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// Ignore if already present or specific harmless errors if needed
+		// But usually we want to know
+		return fmt.Errorf("peering add failed: %v, out: %s", err, string(output))
+	}
+	
+	log.Printf("Successfully added peer to peering list: %s", multiaddr)
 	return nil
 }
 
@@ -185,6 +208,11 @@ func (m *IpfsManager) Start(ctx context.Context) error {
 		if v == "0" || strings.EqualFold(v, "false") {
 			mdnsEnabled = false
 		}
+	}
+
+	// Force apply optimization config every start to ensure updates
+	if err := m.ConfigRepo(); err != nil {
+		log.Printf("Warning: Failed to apply optimization config: %v", err)
 	}
 
 	healCmd := exec.Command(m.BinPath, "config", "Discovery.MDNS.Enabled", strconv.FormatBool(mdnsEnabled), "--json")

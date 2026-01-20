@@ -1,14 +1,14 @@
 <script setup lang="ts">
-import { useTaskStore, type Task } from '@/stores/tasks';
+import { useTaskStore } from '@/stores/tasks';
 import { storeToRefs } from 'pinia';
-import { X, CheckCircle, AlertCircle, Upload, Download, Trash2, Activity } from 'lucide-vue-next';
+import { X, CheckCircle, AlertCircle, Upload, Download, Trash2, Activity, Pause, Play } from 'lucide-vue-next';
 import { computed } from 'vue';
 
 const taskStore = useTaskStore();
 const { tasks } = storeToRefs(taskStore);
 
 const formatSpeed = (bytesPerSec: number) => {
-    if (bytesPerSec === 0) return '0 B/s';
+    if (!bytesPerSec || bytesPerSec === 0) return '0 B/s';
     const k = 1024;
     const sizes = ['B/s', 'KB/s', 'MB/s', 'GB/s'];
     const i = Math.floor(Math.log(bytesPerSec) / Math.log(k));
@@ -23,9 +23,8 @@ const formatSize = (bytes: number) => {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
 
-const pendingTasks = computed(() => tasks.value.filter(t => t.status === 'pending' || t.status === 'running'));
-const completedTasks = computed(() => tasks.value.filter(t => t.status === 'completed' || t.status === 'error'));
-
+const activeTasks = computed(() => tasks.value.filter(t => ['pending', 'running', 'paused'].includes(t.status)));
+const completedTasks = computed(() => tasks.value.filter(t => ['completed', 'error'].includes(t.status)));
 </script>
 
 <template>
@@ -51,13 +50,13 @@ const completedTasks = computed(() => tasks.value.filter(t => t.status === 'comp
 
     <!-- Active Tasks -->
     <div class="space-y-4">
-        <h3 class="font-bold text-lg text-nord-1 dark:text-nord-5 uppercase text-sm tracking-wider">Active Tasks ({{ pendingTasks.length }})</h3>
+        <h3 class="font-bold text-lg text-nord-1 dark:text-nord-5 uppercase text-sm tracking-wider">Active Tasks ({{ activeTasks.length }})</h3>
         
-        <div v-if="pendingTasks.length === 0" class="p-8 text-center border-2 border-dashed border-nord-4 dark:border-nord-2 rounded-xl text-nord-3 dark:text-nord-4">
+        <div v-if="activeTasks.length === 0" class="p-8 text-center border-2 border-dashed border-nord-4 dark:border-nord-2 rounded-xl text-nord-3 dark:text-nord-4">
             No active tasks currently running.
         </div>
 
-        <div v-for="task in pendingTasks" :key="task.id" class="bg-white dark:bg-nord-1 p-4 rounded-xl shadow-sm border border-nord-4 dark:border-nord-2 space-y-3">
+        <div v-for="task in activeTasks" :key="task.id" class="bg-white dark:bg-nord-1 p-4 rounded-xl shadow-sm border border-nord-4 dark:border-nord-2 space-y-3">
             <div class="flex justify-between items-start">
                 <div class="flex items-center gap-3">
                     <div class="p-2 rounded-lg bg-nord-6 dark:bg-nord-2">
@@ -66,24 +65,38 @@ const completedTasks = computed(() => tasks.value.filter(t => t.status === 'comp
                     </div>
                     <div>
                         <p class="font-bold text-nord-1 dark:text-nord-6 truncate max-w-xs">{{ task.name }}</p>
-                        <p class="text-xs text-nord-3 dark:text-nord-4 flex items-center gap-2">
-                            <span v-if="task.status === 'pending'">Waiting...</span>
-                            <span v-else>{{ formatSize(task.loaded) }} / {{ formatSize(task.total) }}</span>
+                        <div class="text-xs text-nord-3 dark:text-nord-4 flex items-center gap-2">
+                            <span>{{ formatSize(task.loaded) }} / {{ formatSize(task.total) }}</span>
                             <span v-if="task.status === 'running'" class="text-nord-10 font-mono">
                                 {{ formatSpeed(task.speed) }}
                             </span>
-                        </p>
+                            <span v-if="task.status === 'paused'" class="text-orange-500 font-bold">
+                                Paused
+                            </span>
+                        </div>
                     </div>
                 </div>
-                <button @click="taskStore.removeTask(task.id)" class="text-nord-3 hover:text-red-500">
-                    <X class="w-4 h-4" />
-                </button>
+                
+                <div class="flex items-center gap-2">
+                    <!-- Pause/Resume Controls -->
+                    <button v-if="task.status === 'running'" @click="taskStore.pauseTask(task.id)" class="p-1 text-nord-3 hover:text-nord-10 dark:hover:text-nord-8 transition-colors" title="Pause">
+                        <Pause class="w-4 h-4" />
+                    </button>
+                    <button v-if="task.status === 'paused'" @click="taskStore.resumeTask(task.id)" class="p-1 text-nord-3 hover:text-nord-10 dark:hover:text-nord-8 transition-colors" title="Resume">
+                        <Play class="w-4 h-4" />
+                    </button>
+                    
+                    <button @click="taskStore.removeTask(task.id)" class="p-1 text-nord-3 hover:text-red-500 transition-colors" title="Cancel">
+                        <X class="w-4 h-4" />
+                    </button>
+                </div>
             </div>
             
             <!-- Progress Bar -->
             <div class="h-2 w-full bg-nord-6 dark:bg-nord-3 rounded-full overflow-hidden">
                 <div 
-                    class="h-full bg-nord-10 transition-all duration-300 ease-out"
+                    class="h-full transition-all duration-300 ease-out"
+                    :class="task.status === 'paused' ? 'bg-orange-400' : 'bg-nord-10'"
                     :style="{ width: task.progress + '%' }"
                 ></div>
             </div>
