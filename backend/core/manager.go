@@ -128,12 +128,17 @@ func (m *IpfsManager) ConfigRepo() error {
 		{"Experimental.AcceleratedDHTClient", "true"}, // Fast DHT
 		
 		// Optimization: Connection Manager
-		{"Swarm.ConnMgr.LowWater", "200"},
-		{"Swarm.ConnMgr.HighWater", "600"},
+		// Lower watermark for client usage to save resources
+		{"Swarm.ConnMgr.LowWater", "50"},
+		{"Swarm.ConnMgr.HighWater", "300"},
 		
-		// Optimization: Relay Client
+		// Optimization: Relay Client & Transports
 		{"Swarm.RelayClient.Enabled", "true"},
-		{"Swarm.Transports.Network.Relay", "true"}, // Legacy compatibility
+		{"Swarm.Transports.Network.Relay", "true"},
+		
+		// Optimization: QUIC & WebTransport (Faster, better roaming)
+		{"Swarm.Transports.Network.QUIC", "true"},
+		{"Swarm.Transports.Network.WebTransport", "true"},
 	}
 
 	for _, cfg := range configs {
