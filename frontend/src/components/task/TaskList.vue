@@ -24,13 +24,12 @@ const formatSize = (bytes: number) => {
 };
 
 const activeTasks = computed(() => tasks.value.filter(t => ['pending', 'running', 'paused'].includes(t.status)));
-const completedTasks = computed(() => tasks.value.filter(t => ['completed', 'error'].includes(t.status)));
+const completedTasks = computed(() => tasks.value.filter(t => ['completed', 'error', 'canceled'].includes(t.status)));
 </script>
 
 <template>
   <div class="h-full flex flex-col p-8 space-y-6 animate-fade-in">
     
-    <!-- Header -->
     <div class="flex items-center justify-between">
         <div class="space-y-1">
             <h2 class="text-2xl font-bold text-nord-1 dark:text-nord-6 flex items-center gap-3">
@@ -48,7 +47,6 @@ const completedTasks = computed(() => tasks.value.filter(t => ['completed', 'err
         </button>
     </div>
 
-    <!-- Active Tasks -->
     <div class="space-y-4">
         <h3 class="font-bold text-lg text-nord-1 dark:text-nord-5 uppercase text-sm tracking-wider">Active Tasks ({{ activeTasks.length }})</h3>
         
@@ -66,11 +64,12 @@ const completedTasks = computed(() => tasks.value.filter(t => ['completed', 'err
                     <div>
                         <p class="font-bold text-nord-1 dark:text-nord-6 truncate max-w-xs">{{ task.name }}</p>
                         <div class="text-xs text-nord-3 dark:text-nord-4 flex items-center gap-2">
-                            <span>{{ formatSize(task.loaded) }} / {{ formatSize(task.total) }}</span>
-                            <span v-if="task.status === 'running'" class="text-nord-10 font-mono">
+                            <span v-if="task.status === 'pending'">Waiting...</span>
+                            <span v-else>{{ formatSize(task.loaded) }} / {{ formatSize(task.total) }}</span>
+                            <span v-if="task.type === 'download' && task.status === 'running'" class="text-nord-10 font-mono">
                                 {{ formatSpeed(task.speed) }}
                             </span>
-                            <span v-if="task.status === 'paused'" class="text-orange-500 font-bold">
+                            <span v-if="task.type === 'download' && task.status === 'paused'" class="text-orange-500 font-bold">
                                 Paused
                             </span>
                         </div>
@@ -78,11 +77,10 @@ const completedTasks = computed(() => tasks.value.filter(t => ['completed', 'err
                 </div>
                 
                 <div class="flex items-center gap-2">
-                    <!-- Pause/Resume Controls -->
-                    <button v-if="task.status === 'running'" @click="taskStore.pauseTask(task.id)" class="p-1 text-nord-3 hover:text-nord-10 dark:hover:text-nord-8 transition-colors" title="Pause">
+                    <button v-if="task.type === 'download' && task.status === 'running'" @click="taskStore.pauseTask(task.id)" class="p-1 text-nord-3 hover:text-nord-10 dark:hover:text-nord-8 transition-colors" title="Pause">
                         <Pause class="w-4 h-4" />
                     </button>
-                    <button v-if="task.status === 'paused'" @click="taskStore.resumeTask(task.id)" class="p-1 text-nord-3 hover:text-nord-10 dark:hover:text-nord-8 transition-colors" title="Resume">
+                    <button v-if="task.type === 'download' && task.status === 'paused'" @click="taskStore.resumeTask(task.id)" class="p-1 text-nord-3 hover:text-nord-10 dark:hover:text-nord-8 transition-colors" title="Resume">
                         <Play class="w-4 h-4" />
                     </button>
                     
@@ -92,7 +90,6 @@ const completedTasks = computed(() => tasks.value.filter(t => ['completed', 'err
                 </div>
             </div>
             
-            <!-- Progress Bar -->
             <div class="h-2 w-full bg-nord-6 dark:bg-nord-3 rounded-full overflow-hidden">
                 <div 
                     class="h-full transition-all duration-300 ease-out"
@@ -103,7 +100,6 @@ const completedTasks = computed(() => tasks.value.filter(t => ['completed', 'err
         </div>
     </div>
 
-    <!-- Completed Tasks -->
     <div v-if="completedTasks.length > 0" class="space-y-4 pt-4">
         <h3 class="font-bold text-lg text-nord-1 dark:text-nord-5 uppercase text-sm tracking-wider">History</h3>
         

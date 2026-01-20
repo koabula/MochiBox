@@ -3,7 +3,6 @@ package api
 import (
 	"mochibox-core/core"
 	"sync"
-	// "mochibox-core/db" // Used in handle functions but maybe not directly in NewServer signature if we pass *gorm.DB
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -20,6 +19,9 @@ type Server struct {
 	// Network Boost State
 	BoostMutex   sync.Mutex
 	IsBoosting   bool
+
+	DownloadTasksMu sync.Mutex
+	DownloadTasks   map[string]*DownloadTask
 }
 
 func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManager, accMgr *core.AccountManager) *Server {
@@ -46,6 +48,7 @@ func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManage
 		IpfsManager: ipfsMgr,
 		AccountManager: accMgr,
 		ShutdownChan: make(chan bool),
+		DownloadTasks: make(map[string]*DownloadTask),
 	}
 	s.RegisterRoutes()
 	return s
@@ -64,6 +67,7 @@ func (s *Server) RegisterRoutes() {
 		s.registerSystemRoutes(api)
 		s.registerSharedRoutes(api)
 		s.registerAccountRoutes(api)
+		s.registerTaskRoutes(api)
 	}
     
     s.registerFileRoutes(s.DB)

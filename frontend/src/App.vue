@@ -147,9 +147,6 @@ const handleDownload = async (file: any) => {
         return;
     }
 
-    const taskId = taskStore.addTask('download', file.name);
-    toastStore.success(`Download started for ${file.name}`);
-
     // Determine Strategy
     // Strategy A: Frontend FileSystem API / Blob (Interactive or Fallback)
     // Strategy B: Backend Silent Download (Only if path set, ask disabled, and file not encrypted)
@@ -159,11 +156,13 @@ const handleDownload = async (file: any) => {
 
     try {
         if (useBackendSilent) {
-             // Strategy B: Backend Silent
-             await api.post(`/files/${file.id}/download`, { password: file.password });
-             taskStore.completeTask(taskId);
+             await taskStore.startBackendDownload(file.id, file.name, file.password);
+             toastStore.success(`Download started for ${file.name}`);
              return;
         }
+
+        const taskId = taskStore.addTask('download', file.name);
+        toastStore.success(`Download started for ${file.name}`);
 
         // Strategy A: Frontend Download (Interactive)
         let fileHandle = null;
