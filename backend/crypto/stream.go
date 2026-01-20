@@ -92,9 +92,10 @@ type SeekableAESCTRDecrypter struct {
 	iv     []byte // The original IV (from file header)
 	offset int64  // Current logical offset (decrypted stream position)
 	stream cipher.Stream
+	totalSize int64 // Physical total size (including IV)
 }
 
-func NewSeekableAESCTRDecrypter(src io.ReadSeeker, key []byte) (*SeekableAESCTRDecrypter, error) {
+func NewSeekableAESCTRDecrypter(src io.ReadSeeker, key []byte, totalSize int64) (*SeekableAESCTRDecrypter, error) {
 	// Read IV
 	iv := make([]byte, aes.BlockSize)
 	if _, err := io.ReadFull(src, iv); err != nil {
@@ -115,6 +116,7 @@ func NewSeekableAESCTRDecrypter(src io.ReadSeeker, key []byte) (*SeekableAESCTRD
 		iv:     iv,
 		offset: 0,
 		stream: stream,
+		totalSize: totalSize,
 	}, nil
 }
 
@@ -135,19 +137,26 @@ func (r *SeekableAESCTRDecrypter) Seek(offset int64, whence int) (int64, error) 
 	case io.SeekCurrent:
 		abs = r.offset + offset
 	case io.SeekEnd:
-		// We don't know the size unless we seek to end of src
-		// But src includes IV.
-		// So we seek src to end
-		size, err := r.src.Seek(0, io.SeekEnd)
-		if err != nil {
-			return 0, err
+		// Optimization: Use known totalSize if available to avoid expensive Seek
+		if r.totalSize > 0 {
+			if r.totalSize < int64(aes.BlockSize) {
+				return 0, fmt.Errorf("file too small")
+			}
+			logicalSize := r.totalSize - int64(aes.BlockSize)
+			abs = logicalSize + offset
+		} else {
+			// Fallback: Seek to end
+			size, err := r.src.Seek(0, io.SeekEnd)
+			if err != nil {
+				return 0, err
+			}
+			// Logical size = Physical size - 16
+			if size < int64(aes.BlockSize) {
+				return 0, fmt.Errorf("file too small")
+			}
+			logicalSize := size - int64(aes.BlockSize)
+			abs = logicalSize + offset
 		}
-		// Logical size = Physical size - 16
-		if size < int64(aes.BlockSize) {
-			return 0, fmt.Errorf("file too small")
-		}
-		logicalSize := size - int64(aes.BlockSize)
-		abs = logicalSize + offset
 	default:
 		return 0, fmt.Errorf("invalid whence")
 	}

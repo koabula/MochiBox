@@ -110,7 +110,7 @@ func (s *Server) handlePreview(c *gin.Context) {
             
             // Try Seekable Decryption if source supports Seek
             if rs, ok := reader.(io.ReadSeeker); ok {
-                decReader, err := crypto.NewSeekableAESCTRDecrypter(rs, key)
+                decReader, err := crypto.NewSeekableAESCTRDecrypter(rs, key, size)
                 if err != nil {
                     c.String(http.StatusInternalServerError, "Decryption init failed")
                     return
@@ -155,7 +155,7 @@ func (s *Server) handlePreview(c *gin.Context) {
             
             // Try Seekable Decryption
             if rs, ok := reader.(io.ReadSeeker); ok {
-                decReader, err := crypto.NewSeekableAESCTRDecrypter(rs, sessionKey)
+                decReader, err := crypto.NewSeekableAESCTRDecrypter(rs, sessionKey, size)
                 if err != nil {
                     c.String(http.StatusInternalServerError, "Decryption init failed")
                     return
