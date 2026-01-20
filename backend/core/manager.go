@@ -140,6 +140,9 @@ func (m *IpfsManager) ConfigRepo() error {
 		// Optimization: QUIC & WebTransport (Faster, better roaming)
 		{"Swarm.Transports.Network.QUIC", "true"},
 		{"Swarm.Transports.Network.WebTransport", "true"},
+
+		// Feature: Filestore (No Copy)
+		{"Experimental.FilestoreEnabled", "true"},
 	}
 
 	for _, cfg := range configs {

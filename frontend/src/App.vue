@@ -476,13 +476,13 @@ const handleUpdateDataDir = async () => {
         @close="showPreviewModal = false"
     />
 
-    <!-- Uploading Overlay -->
-    <div v-if="uploading" class="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center">
+    <!-- Uploading Overlay (Disabled for background uploads) -->
+    <!-- <div v-if="uploading" class="fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center">
         <div class="bg-white dark:bg-nord-1 p-8 rounded-2xl shadow-2xl flex flex-col items-center gap-4">
             <div class="animate-spin rounded-full h-12 w-12 border-4 border-nord-4 dark:border-nord-3 border-t-nord-10"></div>
             <p class="font-medium">Uploading to IPFS...</p>
         </div>
-    </div>
+    </div> -->
 
   </div>
 </template>

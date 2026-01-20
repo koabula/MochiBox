@@ -20,10 +20,12 @@ import (
 	
 	kuborpc "github.com/ipfs/kubo/client/rpc"
 	iface "github.com/ipfs/kubo/core/coreiface"
+	"github.com/ipfs/kubo/core/coreiface/options"
 	"github.com/ipfs/boxo/files"
 	"github.com/ipfs/boxo/path"
 	"github.com/multiformats/go-multiaddr"
     "github.com/libp2p/go-libp2p/core/peer"
+	"os"
 )
 
 type MochiNode struct {
@@ -104,6 +106,27 @@ func (n *MochiNode) AddFile(ctx context.Context, reader io.Reader) (string, erro
 		return "", fmt.Errorf("failed to add file to IPFS: %w", err)
 	}
 	
+	return p.RootCid().String(), nil
+}
+
+func (n *MochiNode) AddFileNoCopy(ctx context.Context, filePath string) (string, error) {
+	stat, err := os.Stat(filePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to stat file: %w", err)
+	}
+
+	// Create a serial file node (references path)
+	node, err := files.NewSerialFile(filePath, false, stat)
+	if err != nil {
+		return "", fmt.Errorf("failed to create serial file: %w", err)
+	}
+
+	// Add to IPFS with Nocopy option
+	p, err := n.IPFS.Unixfs().Add(ctx, node, options.Unixfs.Nocopy(true))
+	if err != nil {
+		return "", fmt.Errorf("failed to add file (nocopy) to IPFS: %w", err)
+	}
+
 	return p.RootCid().String(), nil
 }
 

@@ -334,8 +334,16 @@ func (s *Server) handleUpload(c *gin.Context, database *gorm.DB) {
 	}
 
 	files := form.File["file"]
-	if len(files) == 0 {
+	useLocal := c.PostForm("use_local") == "true"
+	filePath := c.PostForm("file_path")
+
+	if !useLocal && len(files) == 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "No file uploaded"})
+		return
+	}
+	
+	if useLocal && filePath == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Local file path required"})
 		return
 	}
 
@@ -556,10 +564,12 @@ func (s *Server) handleUpload(c *gin.Context, database *gorm.DB) {
 			encryptionMeta = base64.StdEncoding.EncodeToString(encKey)
 		}
 
-		cid, err = s.Node.AddFile(c.Request.Context(), reader)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("IPFS Add failed: %v", err)})
-			return
+		if !useLocal {
+			cid, err = s.Node.AddFile(c.Request.Context(), reader)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("IPFS Add failed: %v", err)})
+				return
+			}
 		}
 	}
 

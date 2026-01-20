@@ -33,7 +33,7 @@ export const useFileStore = defineStore('files', () => {
     }
   }
 
-  async function uploadFile(input: File | File[], options: { encryptionType: string, password?: string, receiverPubKey?: string, savePassword?: boolean } = { encryptionType: 'public' }) {
+  async function uploadFile(input: File | File[], options: { encryptionType: string, password?: string, receiverPubKey?: string, savePassword?: boolean, useLocalFile?: boolean } = { encryptionType: 'public' }) {
     const taskStore = useTaskStore();
     
     let name = '';
@@ -53,7 +53,16 @@ export const useFileStore = defineStore('files', () => {
         }
     } else {
         name = input.name;
-        formData.append('file', input);
+        // Check for local file optimization (No Copy)
+        // @ts-ignore
+        if (options.useLocalFile && input.path) {
+             // @ts-ignore
+             formData.append('file_path', input.path);
+             formData.append('use_local', 'true');
+             // Do NOT append file content
+        } else {
+             formData.append('file', input);
+        }
     }
 
     const taskId = taskStore.addTask('upload', name);

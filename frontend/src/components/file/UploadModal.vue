@@ -192,6 +192,15 @@ const close = () => {
                     <input v-model="receiverPubKey" type="text" placeholder="Receiver Public Key (ID)" class="w-full px-3 py-2 rounded-lg border border-nord-4 dark:border-nord-3 bg-white dark:bg-nord-0 text-sm font-mono focus:ring-2 focus:ring-nord-10 outline-none text-nord-0 dark:text-nord-6" />
                     <p class="text-xs text-nord-3 dark:text-nord-4">Only the specified user can decrypt this file.</p>
                 </div>
+                <div v-if="encryptionType === 'public' && !selectedFiles.length" class="mt-4 animate-fade-in">
+                    <label class="flex items-center gap-2 cursor-pointer select-none p-2 bg-nord-4 dark:bg-nord-3 rounded-lg hover:bg-nord-5 dark:hover:bg-nord-2 transition-colors">
+                        <input type="checkbox" v-model="useLocalFile" class="rounded border-nord-4 dark:border-nord-3 text-nord-10 focus:ring-nord-10 bg-white dark:bg-nord-0" />
+                        <div>
+                            <span class="text-sm font-bold text-nord-1 dark:text-nord-5">Use local file (No Copy)</span>
+                            <p class="text-xs text-nord-3 dark:text-nord-4">Recommended for large files. File must remain on disk.</p>
+                        </div>
+                    </label>
+                </div>
             </div>
         </div>
 
