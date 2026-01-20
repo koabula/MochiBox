@@ -26,6 +26,11 @@ const sharedModalData = ref<any>(null);
 const showFolderModal = ref(false);
 const selectedFolder = ref<any>(null);
 
+// Search State
+const searchStatus = ref('idle');
+const peersCount = ref(0);
+let searchEventSource: EventSource | null = null;
+
 onMounted(() => {
     sharedStore.fetchHistory();
 });
@@ -40,6 +45,15 @@ const handleImportShared = async () => {
         let encryptionType = 'public';
         let encryptionMeta = '';
         let embeddedPassword = '';
+        let peers: string[] = [];
+
+        // Reset Search State
+        searchStatus.value = 'idle';
+        peersCount.value = 0;
+        if (searchEventSource) {
+            searchEventSource.close();
+            searchEventSource = null;
+        }
 
         // 1. Try Parse Mochi Link (mochi://BASE64)
         if (input.startsWith('mochi://')) {
@@ -52,6 +66,7 @@ const handleImportShared = async () => {
                 for (let i = 0; i < binaryStr.length; i++) {
                     bytes[i] = binaryStr.charCodeAt(i);
                 }
+                
                 const decoder = new TextDecoder();
                 const jsonStr = decoder.decode(bytes);
                 
@@ -61,6 +76,7 @@ const handleImportShared = async () => {
                 name = payload.n || '';
                 size = payload.s || 0;
                 mimeType = payload.m || '';
+                if (payload.peers) peers = payload.peers;
                 
                 // Map short type to full type
                 if (payload.t === 'pwd') encryptionType = 'password';
@@ -124,7 +140,39 @@ const handleImportShared = async () => {
         
         sharedInput.value = '';
 
-        sharedStore.addToHistory(cid, name, size, mimeType, encryptionType, encryptionMeta)
+        // Start Search & Connect
+        if (peers.length > 0) {
+            api.post('/shared/connect', { peers }).catch(console.warn);
+        }
+        
+        searchStatus.value = 'searching';
+        const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
+        
+        // Ensure we close previous
+        if (searchEventSource) searchEventSource.close();
+        
+        searchEventSource = new EventSource(`${baseUrl}/shared/search/${cid}`);
+        
+        searchEventSource.addEventListener('update', (e) => {
+             try {
+                const data = JSON.parse(e.data);
+                peersCount.value = data.peers;
+                if (data.peers > 0) searchStatus.value = 'found';
+             } catch {}
+        });
+        
+        searchEventSource.addEventListener('done', (e) => {
+            searchEventSource?.close();
+            if (peersCount.value === 0) searchStatus.value = 'idle'; // Not found
+            else searchStatus.value = 'found';
+        });
+        
+        searchEventSource.onerror = () => {
+            searchEventSource?.close();
+            if (peersCount.value === 0) searchStatus.value = 'idle';
+        };
+
+        sharedStore.addToHistory(cid, name, size, mimeType, encryptionType, encryptionMeta, input)
             .then((saved) => {
                 saved.encryption_type = encryptionType;
                 saved.encryption_meta = encryptionMeta;
@@ -313,9 +361,16 @@ const handleDownload = async (file: any, password?: string) => {
 };
 
 const handleShare = (file: any) => {
+    // Prefer original link if available
+    if (file.original_link) {
+        navigator.clipboard.writeText(file.original_link);
+        toastStore.success('Mochi Link copied to clipboard');
+        return;
+    }
+
     // Copy CID to clipboard
     navigator.clipboard.writeText(file.cid);
-    toastStore.success('CID copied to clipboard');
+    toastStore.success('CID copied to clipboard (No Link Metadata)');
 };
 
 const handlePin = async (file: any) => {
@@ -427,6 +482,8 @@ const onModalPin = () => {
         <SharedFileModal 
             :is-open="showSharedModal"
             :shared-data="sharedModalData"
+            :search-status="searchStatus"
+            :peers-count="peersCount"
             @close="showSharedModal = false"
             @preview="onModalPreview"
             @download="onModalDownload"

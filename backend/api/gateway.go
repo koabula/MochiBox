@@ -9,6 +9,7 @@ import (
 	"mime"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"mochibox-core/crypto"
 	"mochibox-core/db"
@@ -106,15 +107,30 @@ func (s *Server) handlePreview(c *gin.Context) {
             }
             
             key := crypto.DeriveKey(password, salt)
-            decReader, err := crypto.NewAESCTRDecrypter(reader, key)
-            if err != nil {
-                c.String(http.StatusInternalServerError, "Decryption init failed")
-                return
-            }
-            reader = decReader
-            // Adjust size for IV
-            if size > 16 {
-                size -= 16
+            
+            // Try Seekable Decryption if source supports Seek
+            if rs, ok := reader.(io.ReadSeeker); ok {
+                decReader, err := crypto.NewSeekableAESCTRDecrypter(rs, key)
+                if err != nil {
+                    c.String(http.StatusInternalServerError, "Decryption init failed")
+                    return
+                }
+                reader = decReader
+                // Adjust size for IV
+                if size > 16 {
+                    size -= 16
+                }
+            } else {
+                decReader, err := crypto.NewAESCTRDecrypter(reader, key)
+                if err != nil {
+                    c.String(http.StatusInternalServerError, "Decryption init failed")
+                    return
+                }
+                reader = decReader
+                // Adjust size for IV
+                if size > 16 {
+                    size -= 16
+                }
             }
             
         } else if encryptionType == "private" {
@@ -137,15 +153,27 @@ func (s *Server) handlePreview(c *gin.Context) {
                 return
             }
             
-            decReader, err := crypto.NewAESCTRDecrypter(reader, sessionKey)
-            if err != nil {
-                c.String(http.StatusInternalServerError, "Decryption init failed")
-                return
-            }
-            reader = decReader
-            // Adjust size for IV
-            if size > 16 {
-                size -= 16
+            // Try Seekable Decryption
+            if rs, ok := reader.(io.ReadSeeker); ok {
+                decReader, err := crypto.NewSeekableAESCTRDecrypter(rs, sessionKey)
+                if err != nil {
+                    c.String(http.StatusInternalServerError, "Decryption init failed")
+                    return
+                }
+                reader = decReader
+                if size > 16 {
+                    size -= 16
+                }
+            } else {
+                decReader, err := crypto.NewAESCTRDecrypter(reader, sessionKey)
+                if err != nil {
+                    c.String(http.StatusInternalServerError, "Decryption init failed")
+                    return
+                }
+                reader = decReader
+                if size > 16 {
+                    size -= 16
+                }
             }
         }
     }
@@ -159,15 +187,28 @@ func (s *Server) handlePreview(c *gin.Context) {
 	if nameParam := c.Query("filename"); nameParam != "" {
 		filename = nameParam
 	}
-
+    
+    // Sniff content type if needed
 	if contentType == "" || contentType == "application/octet-stream" {
 		shouldSniff := c.Query("download") != "true"
-		if shouldSniff {
+        // Only sniff if we can't Seek back or if we don't care (not seekable)
+        // If it is seekable, we can read and seek back.
+        if rs, ok := reader.(io.ReadSeeker); ok && shouldSniff {
+             n, _ = rs.Read(buffer)
+             if n > 0 {
+                 contentType = http.DetectContentType(buffer[:n])
+                 rs.Seek(0, io.SeekStart) // Reset
+                 n = 0 // Don't write buffer manually
+             }
+        } else if shouldSniff {
+            // Non-seekable, we have to peek
 			n, _ = reader.Read(buffer)
+            if n > 0 {
+                contentType = http.DetectContentType(buffer[:n])
+            }
 		}
-		if n > 0 {
-			contentType = http.DetectContentType(buffer[:n])
-		} else {
+        
+		if contentType == "" {
 			contentType = "application/octet-stream"
 		}
 	}
@@ -198,22 +239,24 @@ func (s *Server) handlePreview(c *gin.Context) {
 	
 	// Disposition
 	if c.Query("download") == "true" {
-		// Use fmt.Sprintf for filename to handle UTF-8 if needed, but simple ASCII is safer for now.
-		// Or use built-in safe header setting.
-		// mime.FormatMediaType sometimes is tricky with filenames.
-		// Let's manually set it to ensure browser sees it.
 		c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
 	} else {
 		c.Header("Content-Disposition", "inline")
 	}
 	
-	// Write the buffer we peeked (only if we peeked)
-	if n > 0 {
-		if _, err := c.Writer.Write(buffer[:n]); err != nil {
-			return
-		}
-	}
-	
-	// Copy the rest
-	io.Copy(c.Writer, reader)
+    // Serve
+    if rs, ok := reader.(io.ReadSeeker); ok {
+        // http.ServeContent handles Range, Content-Length, etc.
+        // Note: we already set some headers, ServeContent respects them or overwrites if needed.
+        // It handles Range automatically.
+        http.ServeContent(c.Writer, c.Request, filename, time.Time{}, rs)
+    } else {
+        // Write the buffer we peeked (only if we peeked and couldn't seek back)
+        if n > 0 {
+            if _, err := c.Writer.Write(buffer[:n]); err != nil {
+                return
+            }
+        }
+        io.Copy(c.Writer, reader)
+    }
 }

@@ -121,6 +121,19 @@ func (m *IpfsManager) ConfigRepo() error {
 		{"API.HTTPHeaders.Access-Control-Allow-Methods", `["PUT", "POST", "GET"]`},
 		{"Discovery.MDNS.Enabled", strconv.FormatBool(mdnsEnabled)},
 		{"Pubsub.Router", `"gossipsub"`},
+		
+		// Optimization: DHT & NAT
+		{"Routing.Type", `"dht"`}, // Force DHT (Server mode if possible, or auto)
+		{"Swarm.EnableAutoNATService", "true"},
+		{"Experimental.AcceleratedDHTClient", "true"}, // Fast DHT
+		
+		// Optimization: Connection Manager
+		{"Swarm.ConnMgr.LowWater", "200"},
+		{"Swarm.ConnMgr.HighWater", "600"},
+		
+		// Optimization: Relay Client
+		{"Swarm.RelayClient.Enabled", "true"},
+		{"Swarm.Transports.Network.Relay", "true"}, // Legacy compatibility
 	}
 
 	for _, cfg := range configs {

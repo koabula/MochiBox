@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import { Download, Eye, FileText, X, Pin, Lock, Globe, UserCheck, Copy } from 'lucide-vue-next';
-import { ref, watch } from 'vue';
+import { ref, watch, computed } from 'vue';
 import { useToastStore } from '@/stores/toast';
 
 const props = defineProps<{
   isOpen: boolean;
   sharedData: any;
+  searchStatus?: string; // 'idle' | 'searching' | 'found'
+  peersCount?: number;
 }>();
 
 const emit = defineEmits(['close', 'preview', 'download', 'pin']);
@@ -16,6 +18,9 @@ const passwordInput = ref('');
 watch(() => props.isOpen, (newVal) => {
     if (newVal) passwordInput.value = '';
 });
+
+const isSearching = computed(() => props.searchStatus === 'searching');
+const hasPeers = computed(() => (props.peersCount || 0) > 0);
 
 const handleAction = (action: 'preview' | 'download') => {
     emit(action, passwordInput.value);
@@ -95,23 +100,39 @@ const copyCID = async () => {
                 @keyup.enter="handleAction('preview')"
             />
         </div>
+        
+        <!-- Search Status -->
+        <div v-if="searchStatus && searchStatus !== 'idle'" class="flex items-center justify-center gap-2 p-3 bg-nord-6 dark:bg-nord-2 rounded-xl text-sm transition-all duration-300">
+             <div v-if="searchStatus === 'searching'" class="w-2 h-2 rounded-full bg-nord-10 animate-ping"></div>
+             <span v-if="searchStatus === 'searching'" class="text-nord-3 dark:text-nord-4 font-medium">Searching DHT network...</span>
+             <span v-else-if="searchStatus === 'found'" class="text-green-600 dark:text-green-400 font-bold flex items-center gap-2">
+                 <div class="w-2 h-2 rounded-full bg-green-500"></div>
+                 Found {{ peersCount }} Peers
+             </span>
+        </div>
 
         <!-- Actions -->
         <div class="flex gap-3">
             <button 
                 @click="handleAction('preview')"
+                :disabled="isSearching && !hasPeers"
+                :class="{'opacity-50 cursor-not-allowed': isSearching && !hasPeers}"
                 class="flex-1 py-3 px-4 bg-white dark:bg-nord-3 border border-nord-4 dark:border-nord-2 hover:bg-nord-5 dark:hover:bg-nord-2 text-nord-1 dark:text-nord-6 font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
             >
                 <Eye class="w-4 h-4" /> Preview
             </button>
             <button 
                 @click="handleAction('download')"
+                :disabled="isSearching && !hasPeers"
+                :class="{'opacity-50 cursor-not-allowed': isSearching && !hasPeers}"
                 class="flex-1 py-3 px-4 bg-nord-10 hover:bg-nord-9 text-white font-medium rounded-xl transition-colors shadow-lg shadow-nord-10/20 flex items-center justify-center gap-2"
             >
                 <Download class="w-4 h-4" /> Download
             </button>
             <button 
                 @click="$emit('pin')"
+                :disabled="isSearching && !hasPeers"
+                :class="{'opacity-50 cursor-not-allowed': isSearching && !hasPeers}"
                 class="py-3 px-4 bg-white dark:bg-nord-3 border border-nord-4 dark:border-nord-2 hover:bg-nord-5 dark:hover:bg-nord-2 text-nord-1 dark:text-nord-6 font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
                 title="Pin to Local Node"
             >

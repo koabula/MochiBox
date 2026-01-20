@@ -70,7 +70,7 @@ export const useSharedStore = defineStore('shared', () => {
         }
     };
 
-    const addToHistory = async (cid: string, name?: string, size?: number, mimeType?: string, encryptionType?: string, encryptionMeta?: string) => {
+    const addToHistory = async (cid: string, name?: string, size?: number, mimeType?: string, encryptionType?: string, encryptionMeta?: string, originalLink?: string) => {
         try {
             const response = await api.post('/shared/history', { 
                 cid, 
@@ -78,7 +78,8 @@ export const useSharedStore = defineStore('shared', () => {
                 size,
                 mime_type: mimeType,
                 encryption_type: encryptionType,
-                encryption_meta: encryptionMeta
+                encryption_meta: encryptionMeta,
+                original_link: originalLink
             });
             // Add to top of list or replace existing
             const index = history.value.findIndex(h => h.id === response.data.id);

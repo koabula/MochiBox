@@ -23,6 +23,7 @@ import (
 	"github.com/ipfs/boxo/files"
 	"github.com/ipfs/boxo/path"
 	"github.com/multiformats/go-multiaddr"
+    "github.com/libp2p/go-libp2p/core/peer"
 )
 
 type MochiNode struct {
@@ -436,4 +437,34 @@ func (n *MochiNode) UpdateApiUrl(urlStr string) error {
 	n.IPFS = newApi
 	fmt.Printf("Updated IPFS API Connection to %s\n", ma.String())
 	return nil
+}
+
+func (n *MochiNode) FindProviders(ctx context.Context, cidStr string) (<-chan peer.AddrInfo, error) {
+    // If cidStr doesn't start with /ipfs/, path.NewPath might handle it or not depending on version.
+    // Safest is to ensure /ipfs/ prefix or just rely on library.
+    p := cidStr
+    if !strings.HasPrefix(p, "/ipfs/") {
+        p = "/ipfs/" + p
+    }
+    
+    cidPath, err := path.NewPath(p)
+    if err != nil {
+        return nil, err
+    }
+    
+    return n.IPFS.Routing().FindProviders(ctx, cidPath)
+}
+
+func (n *MochiNode) Connect(ctx context.Context, maStr string) error {
+    ma, err := multiaddr.NewMultiaddr(maStr)
+    if err != nil {
+        return err
+    }
+    
+    info, err := peer.AddrInfoFromP2pAddr(ma)
+    if err != nil {
+        return err
+    }
+    
+    return n.IPFS.Swarm().Connect(ctx, *info)
 }

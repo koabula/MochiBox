@@ -29,6 +29,7 @@ type SharedFile struct {
 	MimeType       string    `json:"mime_type"`
 	EncryptionType string    `json:"encryption_type"`
 	EncryptionMeta string    `json:"encryption_meta"`
+	OriginalLink   string    `json:"original_link"` // Store the full Mochi Link
 	CreatedAt      time.Time `json:"created_at"`
 }
 

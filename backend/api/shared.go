@@ -19,7 +19,66 @@ func (s *Server) registerSharedRoutes(api *gin.RouterGroup) {
 		shared.DELETE("/history/:id", s.handleDeleteSharedHistory)
 		shared.DELETE("/history", s.handleClearSharedHistory)
 		shared.POST("/pin", s.handlePinShared)
+		shared.GET("/search/:cid", s.handleSearchShared)
+		shared.POST("/connect", s.handleSharedConnect)
 	}
+}
+
+func (s *Server) handleSearchShared(c *gin.Context) {
+	cid := c.Param("cid")
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("Access-Control-Allow-Origin", "*")
+
+	ctx := c.Request.Context()
+
+	provs, err := s.Node.FindProviders(ctx, cid)
+	if err != nil {
+		c.SSEvent("error", err.Error())
+		return
+	}
+
+	count := 0
+	// Notify start
+	c.SSEvent("status", "searching")
+	c.Writer.Flush()
+
+	for p := range provs {
+		count++
+		data := map[string]interface{}{
+			"peers": count,
+			"found": p.ID.String(),
+		}
+		c.SSEvent("update", data)
+		c.Writer.Flush()
+	}
+
+	c.SSEvent("done", gin.H{"total": count})
+}
+
+func (s *Server) handleSharedConnect(c *gin.Context) {
+	var req struct {
+		Peers []string `json:"peers"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	count := 0
+	for _, p := range req.Peers {
+		// Async connect to avoid blocking
+		go func(addr string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			s.Node.Connect(ctx, addr)
+		}(p)
+		count++
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "connecting", "count": count})
 }
 
 func (s *Server) handlePinShared(c *gin.Context) {
@@ -118,6 +177,7 @@ func (s *Server) handleAddSharedHistory(c *gin.Context) {
 		MimeType       string `json:"mime_type"`
 		EncryptionType string `json:"encryption_type"`
 		EncryptionMeta string `json:"encryption_meta"`
+		OriginalLink   string `json:"original_link"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -148,6 +208,9 @@ func (s *Server) handleAddSharedHistory(c *gin.Context) {
 			existing.EncryptionType = req.EncryptionType
 			existing.EncryptionMeta = req.EncryptionMeta
 		}
+		if req.OriginalLink != "" {
+			existing.OriginalLink = req.OriginalLink
+		}
 		
 		s.DB.Save(&existing)
 		c.JSON(http.StatusOK, existing)
@@ -163,6 +226,7 @@ func (s *Server) handleAddSharedHistory(c *gin.Context) {
 		MimeType:       req.MimeType,
 		EncryptionType: req.EncryptionType,
 		EncryptionMeta: req.EncryptionMeta,
+		OriginalLink:   req.OriginalLink,
 	}
 
 	if file.MimeType == "" {

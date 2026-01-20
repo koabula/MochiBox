@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy, X, Shield, Link } from 'lucide-vue-next';
+import { Copy, X, Shield, Link, Network } from 'lucide-vue-next';
 import { useToastStore } from '@/stores/toast';
 import { ref } from 'vue';
 import api from '@/api';
@@ -12,6 +12,7 @@ const props = defineProps<{
 const emit = defineEmits(['close']);
 const toast = useToastStore();
 const includePassword = ref(false);
+const includeNodeInfo = ref(false); // Default unchecked
 const passwordInput = ref('');
 
 import { watch } from 'vue';
@@ -19,6 +20,7 @@ watch(() => props.isOpen, (newVal) => {
     if (newVal) {
         includePassword.value = false;
         passwordInput.value = '';
+        includeNodeInfo.value = false;
     }
 });
 
@@ -40,13 +42,29 @@ const handleCopy = async () => {
     const payload: any = {
         v: 1,
         c: props.file.cid,
-        n: props.file.name,
-        s: props.file.size,
+        n: props.file.name || 'Unknown',
+        s: props.file.size || 0,
         t: props.file.encryption_type === 'password' ? 'pwd' : 
            props.file.encryption_type === 'private' ? 'priv' : 'pub'
     };
     if (props.file.mime_type) {
         payload.m = props.file.mime_type;
+    }
+    
+    // Include Node Info (Peers)
+    if (includeNodeInfo.value) {
+        try {
+            const res = await api.get('/system/status');
+            // Filter out localhost
+            const peers = (res.data.addresses || []).filter((a: string) => 
+                !a.includes('/127.0.0.1/') && !a.includes('/::1/')
+            );
+            if (peers.length > 0) {
+                payload.peers = peers;
+            }
+        } catch (e) {
+            console.warn("Failed to fetch node info", e);
+        }
     }
     
     if (props.file.encryption_meta) {
@@ -55,7 +73,6 @@ const handleCopy = async () => {
             payload.p.salt = props.file.encryption_meta;
             if (includePassword.value && passwordInput.value) {
                 // Warning: Sending password in plain text inside the link
-                // Ideally this should be obfuscated or just raw
                 payload.p.pw = passwordInput.value;
             }
         }
@@ -64,25 +81,29 @@ const handleCopy = async () => {
     
     try {
         const jsonStr = JSON.stringify(payload);
-        // UTF-8 Safe Base64 Encoding
         const encoder = new TextEncoder();
         const data = encoder.encode(jsonStr);
-        // Convert Uint8Array to binary string
+        
         let binary = '';
         const len = data.byteLength;
         for (let i = 0; i < len; i++) {
             binary += String.fromCharCode(data[i]);
         }
+
         const base64Str = btoa(binary);
         const shareLink = `mochi://${base64Str}`;
         
         await navigator.clipboard.writeText(shareLink);
         toast.success('Mochi Link copied to clipboard!');
         emit('close');
-    } catch (e) {
+    } catch (e: any) {
         console.error(e);
-        toast.error('Failed to copy');
+        toast.error('Failed to copy: ' + (e.message || 'Unknown error'));
     }
+};
+
+const toggleNodeInfo = () => {
+    includeNodeInfo.value = !includeNodeInfo.value;
 };
 
 const close = () => {
@@ -109,10 +130,21 @@ const close = () => {
               <p class="text-xs font-mono text-nord-3 dark:text-nord-4 mt-1">{{ file.cid }}</p>
           </div>
 
+          <!-- Option: Include Node Info -->
+          <div class="flex items-center gap-3 p-3 rounded-lg hover:bg-nord-6 dark:hover:bg-nord-2 transition-colors cursor-pointer border border-transparent hover:border-nord-4 dark:hover:border-nord-3 select-none" @click="toggleNodeInfo">
+              <input type="checkbox" id="includeNode" v-model="includeNodeInfo" class="w-5 h-5 text-nord-10 rounded focus:ring-nord-10 cursor-pointer" @click.stop />
+              <div class="flex-1 pointer-events-none">
+                  <label class="text-sm font-bold text-nord-1 dark:text-nord-6 flex items-center gap-2 mb-0.5">
+                      <Network class="w-4 h-4" /> Include Node Info
+                  </label>
+                  <p class="text-xs text-nord-3 dark:text-nord-4">Helps recipients find the file faster (Direct Connect)</p>
+              </div>
+          </div>
+
           <div v-if="file.encryption_type === 'password'" class="p-4 border border-amber-200 dark:border-amber-900/50 bg-amber-50 dark:bg-amber-900/10 rounded-xl space-y-3">
-              <div class="flex items-center gap-2">
-                  <input type="checkbox" id="includePw" v-model="includePassword" class="w-4 h-4 text-amber-500 rounded focus:ring-amber-500" />
-                  <label for="includePw" class="text-sm font-bold text-amber-800 dark:text-amber-500 select-none">Include Password in Link</label>
+              <div class="flex items-center gap-2 cursor-pointer" @click="includePassword = !includePassword">
+                  <input type="checkbox" id="includePw" v-model="includePassword" class="w-4 h-4 text-amber-500 rounded focus:ring-amber-500 cursor-pointer" @click.stop />
+                  <label class="text-sm font-bold text-amber-800 dark:text-amber-500 select-none cursor-pointer">Include Password in Link</label>
               </div>
               <p class="text-xs text-amber-700 dark:text-amber-600">Anyone with this link will be able to decrypt the file without entering a password.</p>
               
