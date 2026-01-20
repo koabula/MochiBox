@@ -6,6 +6,7 @@ import { useToastStore } from '@/stores/toast';
 import { useTaskStore } from '@/stores/tasks';
 import { useSettingsStore } from '@/stores/settings';
 import { useAccountStore } from '@/stores/account';
+import { useNetworkStore } from '@/stores/network';
 import { storeToRefs } from 'pinia';
 import FileTable from '@/components/file/FileTable.vue';
 import SharedFileModal from '@/components/file/SharedFileModal.vue';
@@ -17,6 +18,7 @@ const toastStore = useToastStore();
 const taskStore = useTaskStore();
 const settingsStore = useSettingsStore();
 const accountStore = useAccountStore();
+const networkStore = useNetworkStore();
 
 const { history, loading } = storeToRefs(sharedStore);
 const sharedInput = ref('');
@@ -33,6 +35,14 @@ let searchEventSource: EventSource | null = null;
 
 onMounted(() => {
     sharedStore.fetchHistory();
+    
+    // Auto-boost network if peers count is low (e.g. < 20)
+    // This helps when the node has been idle for a long time
+    if (networkStore.status.peers < 20) {
+         api.post('/system/bootstrap').catch(() => {
+             // Ignore errors for auto-boost
+         });
+    }
 });
 
 const handleImportShared = async () => {

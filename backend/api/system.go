@@ -19,6 +19,7 @@ func (s *Server) registerSystemRoutes(rg *gin.RouterGroup) {
 		system.GET("/status", s.handleNodeStatus)
 		system.GET("/peers", s.handleListPeers)
 		system.POST("/connect", s.handleConnectPeer)
+		system.POST("/bootstrap", s.handleBootstrap)
 		system.POST("/shutdown", s.handleShutdown)
 		system.POST("/datadir", s.handleSetDataDir)
 	}
@@ -217,4 +218,40 @@ func (s *Server) handleNodeStatus(c *gin.Context) {
 		"addresses": addrs,
 		"data_dir":  currentDataDir,
 	})
+}
+
+func (s *Server) handleBootstrap(c *gin.Context) {
+	// Standard IPFS Bootstrap Nodes
+	bootstrapPeers := []string{
+		"/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+		"/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+		"/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9CkJg6M6VMcMG_Qx",
+		"/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+		"/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		// 1. Connect to Bootstrap Peers
+		for _, addrStr := range bootstrapPeers {
+			addrInfo, err := peer.AddrInfoFromString(addrStr)
+			if err == nil {
+				go func(info *peer.AddrInfo) {
+					s.Node.IPFS.Swarm().Connect(ctx, *info)
+				}(addrInfo)
+			}
+		}
+
+		// 2. Announce Self to DHT (FindPeer Self)
+		// This forces a lookup which connects to more peers
+		selfKey, err := s.Node.IPFS.Key().Self(ctx)
+		if err == nil {
+			// We ignore the error here as we just want to trigger the side effect of finding peers
+			_, _ = s.Node.IPFS.Routing().FindPeer(ctx, selfKey.ID())
+		}
+	}()
+
+	c.JSON(http.StatusOK, gin.H{"message": "Network boost initiated"})
 }

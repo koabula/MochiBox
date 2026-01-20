@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted } from 'vue';
-import { Activity, Server, Wifi, Globe, Clock, Copy, Plus, Link as LinkIcon } from 'lucide-vue-next';
+import { Activity, Server, Wifi, Globe, Clock, Copy, Plus, Link as LinkIcon, Zap } from 'lucide-vue-next';
 import api from '@/api';
 import { useToastStore } from '@/stores/toast';
 import { useSettingsStore } from '@/stores/settings';
@@ -43,6 +43,15 @@ const handleConnect = async () => {
     }
 };
 
+const handleBoost = async () => {
+    toastStore.success('Boosting network connection...');
+    try {
+        await api.post('/system/bootstrap');
+    } catch (e) {
+        console.error(e);
+    }
+};
+
 onMounted(() => {
     fetchPeers();
     intervalId = setInterval(fetchPeers, 5000);
@@ -72,7 +81,10 @@ const copyToClipboard = (text: string) => {
             </div>
         </div>
         
-        <div class="flex justify-end">
+        <div class="flex justify-end gap-3">
+            <button @click="handleBoost" class="flex items-center gap-2 bg-white dark:bg-nord-1 hover:bg-nord-6 dark:hover:bg-nord-2 text-nord-1 dark:text-nord-6 border border-nord-4 dark:border-nord-2 px-4 py-2 rounded-lg font-medium transition-colors shadow-sm" title="This will try to connect more peers">
+                <Zap class="w-4 h-4 text-amber-500" /> Boost Network
+            </button>
             <button @click="showConnectModal = true" class="flex items-center gap-2 bg-nord-10 hover:bg-nord-9 text-white px-4 py-2 rounded-lg font-medium transition-colors shadow-sm">
                 <Plus class="w-4 h-4" /> Connect Peer
             </button>
