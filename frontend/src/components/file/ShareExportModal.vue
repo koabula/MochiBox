@@ -55,13 +55,29 @@ const handleCopy = async () => {
     if (includeNodeInfo.value) {
         try {
             const res = await api.get('/system/status');
-            // Filter out localhost
-            const peers = (res.data.addresses || []).filter((a: string) => 
-                !a.includes('/127.0.0.1/') && !a.includes('/::1/')
-            );
-            if (peers.length > 0) {
-                payload.peers = peers;
-            }
+            const peerId = res.data.peer_id || '';
+            const seen = new Set<string>();
+            const peers = ((res.data.share_addresses || res.data.addresses) || [])
+                .map((a: string) => String(a || '').trim())
+                .filter((a: string) => {
+                    if (!a) return false;
+                    if (a.includes('/127.0.0.1/') || a.includes('/::1/')) return false;
+                    if (a.includes('/ip4/0.0.0.0/') || a.includes('/ip6/::/')) return false;
+                    return true;
+                })
+                .map((a: string) => {
+                    if (!peerId) return a;
+                    if (a.includes('/p2p/')) return a;
+                    return `${a}/p2p/${peerId}`;
+                })
+                .filter((a: string) => {
+                    if (seen.has(a)) return false;
+                    seen.add(a);
+                    return true;
+                });
+
+            if (peerId) payload.pid = peerId;
+            if (peers.length > 0) payload.peers = peers;
         } catch (e) {
             console.warn("Failed to fetch node info", e);
         }

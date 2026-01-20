@@ -8,6 +8,8 @@ const props = defineProps<{
   sharedData: any;
   searchStatus?: string; // 'idle' | 'searching' | 'found'
   peersCount?: number;
+  connectStatus?: string; // 'idle' | 'connecting' | 'done'
+  connectResult?: any;
 }>();
 
 const emit = defineEmits(['close', 'preview', 'download', 'pin']);
@@ -20,7 +22,7 @@ watch(() => props.isOpen, (newVal) => {
 });
 
 const isSearching = computed(() => props.searchStatus === 'searching');
-const hasPeers = computed(() => (props.peersCount || 0) > 0);
+const hasPeers = computed(() => (props.peersCount || 0) > 0 || (props.connectResult?.connected || 0) > 0);
 
 const handleAction = (action: 'preview' | 'download') => {
     emit(action, passwordInput.value);
@@ -34,6 +36,17 @@ const copyCID = async () => {
         } catch {
             toastStore.error('Failed to copy');
         }
+    }
+};
+
+const copyConnectReport = async () => {
+    try {
+        const report = props.connectResult ? JSON.stringify(props.connectResult, null, 2) : '';
+        if (!report) return;
+        await navigator.clipboard.writeText(report);
+        toastStore.success('Connect report copied');
+    } catch {
+        toastStore.error('Failed to copy');
     }
 };
 </script>
@@ -101,6 +114,18 @@ const copyCID = async () => {
             />
         </div>
         
+        <div v-if="connectStatus && connectStatus !== 'idle'" class="flex items-center justify-center gap-2 p-3 bg-nord-6 dark:bg-nord-2 rounded-xl text-sm transition-all duration-300">
+             <div v-if="connectStatus === 'connecting'" class="w-2 h-2 rounded-full bg-nord-10 animate-ping"></div>
+             <span v-if="connectStatus === 'connecting'" class="text-nord-3 dark:text-nord-4 font-medium">Trying direct connect...</span>
+             <span v-else-if="connectResult?.status === 'done'" class="text-nord-3 dark:text-nord-4 font-medium">
+                Direct connect {{ connectResult.connected }} / {{ connectResult.attempted }}
+             </span>
+             <span v-else-if="connectResult?.status === 'error'" class="text-red-500 font-medium">Direct connect failed</span>
+             <button v-if="connectResult" @click="copyConnectReport" class="ml-2 p-1 text-nord-3 dark:text-nord-4 hover:text-nord-10 transition-colors" title="Copy connect report">
+                <Copy class="w-4 h-4" />
+             </button>
+        </div>
+
         <!-- Search Status -->
         <div v-if="searchStatus && searchStatus !== 'idle'" class="flex items-center justify-center gap-2 p-3 bg-nord-6 dark:bg-nord-2 rounded-xl text-sm transition-all duration-300">
              <div v-if="searchStatus === 'searching'" class="w-2 h-2 rounded-full bg-nord-10 animate-ping"></div>

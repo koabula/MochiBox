@@ -456,15 +456,22 @@ func (n *MochiNode) FindProviders(ctx context.Context, cidStr string) (<-chan pe
 }
 
 func (n *MochiNode) Connect(ctx context.Context, maStr string) error {
-    ma, err := multiaddr.NewMultiaddr(maStr)
-    if err != nil {
-        return err
+    maStr = strings.TrimSpace(maStr)
+    if maStr == "" {
+        return fmt.Errorf("empty multiaddr")
     }
-    
-    info, err := peer.AddrInfoFromP2pAddr(ma)
+
+    info, err := peer.AddrInfoFromString(maStr)
     if err != nil {
-        return err
+        ma, maErr := multiaddr.NewMultiaddr(maStr)
+        if maErr != nil {
+            return err
+        }
+        info, err = peer.AddrInfoFromP2pAddr(ma)
+        if err != nil {
+            return err
+        }
     }
-    
+
     return n.IPFS.Swarm().Connect(ctx, *info)
 }

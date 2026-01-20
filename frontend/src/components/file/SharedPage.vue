@@ -38,6 +38,8 @@ const previewMime = ref('');
 const searchStatus = ref('idle');
 const peersCount = ref(0);
 let searchEventSource: EventSource | null = null;
+const connectStatus = ref<'idle' | 'connecting' | 'done'>('idle');
+const connectResult = ref<any>(null);
 
 onMounted(() => {
     sharedStore.fetchHistory();
@@ -77,6 +79,8 @@ const handleImportShared = async () => {
         // Reset Search State
         searchStatus.value = 'idle';
         peersCount.value = 0;
+        connectStatus.value = 'idle';
+        connectResult.value = null;
         if (searchEventSource) {
             searchEventSource.close();
             searchEventSource = null;
@@ -169,7 +173,20 @@ const handleImportShared = async () => {
 
         // Start Search & Connect
         if (peers.length > 0) {
-            api.post('/shared/connect', { peers }).catch(console.warn);
+            connectStatus.value = 'connecting';
+            api.post('/shared/connect', { peers })
+                .then((res) => {
+                    connectResult.value = res.data;
+                })
+                .catch((e: any) => {
+                    connectResult.value = {
+                        status: 'error',
+                        error: e?.response?.data?.error || e?.message || 'Connect failed'
+                    };
+                })
+                .finally(() => {
+                    connectStatus.value = 'done';
+                });
         }
         
         searchStatus.value = 'searching';
@@ -369,26 +386,40 @@ const handleDownload = async (file: any, password?: string) => {
         if (file.encryption_type) params.append('type', file.encryption_type);
         if (params.toString()) url += `&${params.toString()}`;
 
-        const response = await api.get(url, {
-            responseType: 'blob',
-            onDownloadProgress: (progressEvent) => {
-                if (progressEvent.total) {
-                    taskStore.updateProgress(taskId, progressEvent.loaded, progressEvent.total);
+        let gotProgress = false;
+        let waitingTimer: any = null;
+
+        try {
+            waitingTimer = setTimeout(() => {
+                if (!gotProgress) {
+                    toastStore.warning('Waiting for network response. Try Boost Network or retry later.');
                 }
-            }
-        });
-        
-        const blob = new Blob([response.data], { type: response.headers['content-type'] });
-        const downloadUrl = window.URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = downloadUrl;
-        link.download = filename; 
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        window.URL.revokeObjectURL(downloadUrl);
-        
-        taskStore.completeTask(taskId);
+            }, 10000);
+
+            const response = await api.get(url, {
+                responseType: 'blob',
+                onDownloadProgress: (progressEvent) => {
+                    gotProgress = true;
+                    if (progressEvent.total) {
+                        taskStore.updateProgress(taskId, progressEvent.loaded, progressEvent.total);
+                    }
+                }
+            });
+            
+            const blob = new Blob([response.data], { type: response.headers['content-type'] });
+            const downloadUrl = window.URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            link.download = filename; 
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            window.URL.revokeObjectURL(downloadUrl);
+            
+            taskStore.completeTask(taskId);
+        } finally {
+            if (waitingTimer) clearTimeout(waitingTimer);
+        }
 
     } catch (e: any) {
         console.error(e);
@@ -521,6 +552,8 @@ const onModalPin = () => {
             :shared-data="sharedModalData"
             :search-status="searchStatus"
             :peers-count="peersCount"
+            :connect-status="connectStatus"
+            :connect-result="connectResult"
             @close="showSharedModal = false"
             @preview="onModalPreview"
             @download="onModalDownload"

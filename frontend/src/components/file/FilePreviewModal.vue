@@ -40,13 +40,16 @@ watch(() => props.isOpen, (isOpen) => {
 const fetchText = async () => {
     loading.value = true;
     error.value = '';
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
     try {
-        const res = await fetch(props.url);
+        const res = await fetch(props.url, { signal: controller.signal });
         if (!res.ok) throw new Error(`Failed to load content: ${res.statusText}`);
         textContent.value = await res.text();
     } catch (e: any) {
-        error.value = e.message;
+        error.value = e?.name === 'AbortError' ? 'Request timed out' : e.message;
     } finally {
+        clearTimeout(timeoutId);
         loading.value = false;
     }
 };
@@ -58,13 +61,19 @@ const handleCopy = async () => {
             toastStore.success('Text content copied to clipboard');
         } else if (isImage.value) {
              // Fetch blob and copy to clipboard
-             const res = await fetch(props.url);
-             const blob = await res.blob();
-             await navigator.clipboard.write([
-                 new ClipboardItem({
-                     [blob.type]: blob
-                 })
-             ]);
+             const controller = new AbortController();
+             const timeoutId = setTimeout(() => controller.abort(), 20000);
+             try {
+                 const res = await fetch(props.url, { signal: controller.signal });
+                 const blob = await res.blob();
+                 await navigator.clipboard.write([
+                     new ClipboardItem({
+                         [blob.type]: blob
+                     })
+                 ]);
+             } finally {
+                 clearTimeout(timeoutId);
+             }
              toastStore.success('Image copied to clipboard');
         }
         

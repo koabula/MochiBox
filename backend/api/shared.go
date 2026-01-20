@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 	"time"
 
 	"mochibox-core/db"
@@ -67,18 +69,58 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 		return
 	}
 
-	count := 0
-	for _, p := range req.Peers {
-		// Async connect to avoid blocking
-		go func(addr string) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			defer cancel()
-			s.Node.Connect(ctx, addr)
-		}(p)
-		count++
+	type connectResult struct {
+		Addr  string `json:"addr"`
+		OK    bool   `json:"ok"`
+		Error string `json:"error,omitempty"`
 	}
 
-	c.JSON(http.StatusOK, gin.H{"status": "connecting", "count": count})
+	seen := make(map[string]bool)
+	peers := make([]string, 0, len(req.Peers))
+	for _, p := range req.Peers {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		peers = append(peers, p)
+	}
+
+	results := make([]connectResult, len(peers))
+	var wg sync.WaitGroup
+	wg.Add(len(peers))
+
+	for i, addr := range peers {
+		go func(i int, addr string) {
+			defer wg.Done()
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+			defer cancel()
+			if err := s.Node.Connect(ctx, addr); err != nil {
+				results[i] = connectResult{Addr: addr, OK: false, Error: err.Error()}
+				return
+			}
+			results[i] = connectResult{Addr: addr, OK: true}
+		}(i, addr)
+	}
+
+	wg.Wait()
+
+	connected := 0
+	for _, r := range results {
+		if r.OK {
+			connected++
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status":    "done",
+		"attempted": len(peers),
+		"connected": connected,
+		"results":   results,
+	})
 }
 
 func (s *Server) handlePinShared(c *gin.Context) {
@@ -112,10 +154,10 @@ func (s *Server) handlePinShared(c *gin.Context) {
 			EncryptionType: req.EncryptionType,
 			EncryptionMeta: req.EncryptionMeta,
 		}
-        
-        if newFile.EncryptionType == "" {
-            newFile.EncryptionType = "public"
-        }
+
+		if newFile.EncryptionType == "" {
+			newFile.EncryptionType = "public"
+		}
 
 		// Try to find name from Shared History
 		var sharedFile db.SharedFile
@@ -146,16 +188,16 @@ func (s *Server) handlePinShared(c *gin.Context) {
 			fmt.Printf("Warning: Failed to add pinned file to DB: %v\n", err)
 		}
 	} else {
-        // Update encryption metadata if existing record is missing it (e.g. was public, now known private)
-        // Or if we re-pin a shared file we now have keys for.
-        // Let's update it if provided.
-        if req.EncryptionType != "" {
-            s.DB.Model(&db.File{}).Where("cid = ?", req.CID).Updates(map[string]interface{}{
-                "encryption_type": req.EncryptionType,
-                "encryption_meta": req.EncryptionMeta,
-            })
-        }
-    }
+		// Update encryption metadata if existing record is missing it (e.g. was public, now known private)
+		// Or if we re-pin a shared file we now have keys for.
+		// Let's update it if provided.
+		if req.EncryptionType != "" {
+			s.DB.Model(&db.File{}).Where("cid = ?", req.CID).Updates(map[string]interface{}{
+				"encryption_type": req.EncryptionType,
+				"encryption_meta": req.EncryptionMeta,
+			})
+		}
+	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "pinned", "cid": req.CID})
 }
@@ -211,7 +253,7 @@ func (s *Server) handleAddSharedHistory(c *gin.Context) {
 		if req.OriginalLink != "" {
 			existing.OriginalLink = req.OriginalLink
 		}
-		
+
 		s.DB.Save(&existing)
 		c.JSON(http.StatusOK, existing)
 		return
@@ -232,9 +274,9 @@ func (s *Server) handleAddSharedHistory(c *gin.Context) {
 	if file.MimeType == "" {
 		file.MimeType = "application/octet-stream"
 	}
-	
+
 	if file.EncryptionType == "" {
-	    file.EncryptionType = "public"
+		file.EncryptionType = "public"
 	}
 
 	if file.Name == "" {
@@ -252,7 +294,7 @@ func (s *Server) handleAddSharedHistory(c *gin.Context) {
 			// Use a background context with timeout
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			
+
 			size, err := s.Node.GetFileSize(ctx, cid)
 			if err == nil && size > 0 {
 				s.DB.Model(&db.SharedFile{}).Where("cid = ?", cid).Update("size", size)

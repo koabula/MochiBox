@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 )
 
 func (s *Server) registerSystemRoutes(rg *gin.RouterGroup) {
@@ -44,7 +46,7 @@ func (s *Server) handleSetDataDir(c *gin.Context) {
 	home, _ := os.UserHomeDir()
 	defaultBase := filepath.Join(home, ".mochibox")
 	pointerPath := filepath.Join(defaultBase, ".pointer")
-	
+
 	// Ensure default base exists for the pointer file
 	os.MkdirAll(defaultBase, 0755)
 
@@ -56,12 +58,12 @@ func (s *Server) handleSetDataDir(c *gin.Context) {
 			currentDataDir = p
 		}
 	}
-	
+
 	// Stop services to release file locks
 	if s.IpfsManager != nil {
 		s.IpfsManager.Stop()
 	}
-	
+
 	sqlDB, err := s.DB.DB()
 	if err == nil {
 		sqlDB.Close()
@@ -76,7 +78,7 @@ func (s *Server) handleSetDataDir(c *gin.Context) {
 			fmt.Printf("Warning: Failed to copy DB: %v\n", err)
 		}
 	}
-	
+
 	// 2. Copy IPFS Repo
 	srcRepo := filepath.Join(currentDataDir, "ipfs-repo")
 	dstRepo := filepath.Join(newPath, "ipfs-repo")
@@ -85,15 +87,15 @@ func (s *Server) handleSetDataDir(c *gin.Context) {
 			fmt.Printf("Warning: Failed to copy IPFS Repo: %v\n", err)
 		}
 	}
-	
+
 	// 3. Write Pointer
 	if err := os.WriteFile(pointerPath, []byte(newPath), 0644); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to update settings: " + err.Error()})
 		return
 	}
-	
+
 	c.JSON(http.StatusOK, gin.H{"status": "updated", "message": "Data directory updated. Please restart the application."})
-	
+
 	// Trigger shutdown
 	go func() {
 		time.Sleep(1 * time.Second)
@@ -105,7 +107,7 @@ func (s *Server) handleSetDataDir(c *gin.Context) {
 
 func (s *Server) handleShutdown(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"status": "shutting_down"})
-	
+
 	go func() {
 		// Wait a bit for the response to be sent
 		time.Sleep(100 * time.Millisecond)
@@ -201,23 +203,89 @@ func (s *Server) handleNodeStatus(c *gin.Context) {
 	if err == nil {
 		peerCount = len(peers)
 	}
-	
-	// Get Addresses
+
 	addrs := make([]string, 0)
-	
+	shareAddrs := make([]string, 0)
+	shareSeen := make(map[string]bool)
+	peerID := key.ID().String()
+	tcpPort := "4001"
+
 	listenAddrs, err := s.Node.IPFS.Swarm().ListenAddrs(ctx)
 	if err == nil {
 		for _, addr := range listenAddrs {
-			addrs = append(addrs, addr.String())
+			sAddr := addr.String()
+			addrs = append(addrs, sAddr)
+
+			if p, err := addr.ValueForProtocol(multiaddr.P_TCP); err == nil && strings.TrimSpace(p) != "" {
+				tcpPort = p
+			}
+
+			if strings.Contains(sAddr, "/ip4/0.0.0.0/") || strings.Contains(sAddr, "/ip6/::/") {
+				continue
+			}
+			if strings.Contains(sAddr, "/127.0.0.1/") || strings.Contains(sAddr, "/::1/") {
+				continue
+			}
+
+			dial := sAddr
+			if !strings.Contains(dial, "/p2p/") {
+				dial = dial + "/p2p/" + peerID
+			}
+			if !shareSeen[dial] {
+				shareSeen[dial] = true
+				shareAddrs = append(shareAddrs, dial)
+			}
+		}
+	}
+
+	if ifaces, err := net.Interfaces(); err == nil {
+		for _, iface := range ifaces {
+			if (iface.Flags&net.FlagUp) == 0 || (iface.Flags&net.FlagLoopback) != 0 {
+				continue
+			}
+			iAddrs, err := iface.Addrs()
+			if err != nil {
+				continue
+			}
+			for _, a := range iAddrs {
+				var ip net.IP
+				switch v := a.(type) {
+				case *net.IPNet:
+					ip = v.IP
+				case *net.IPAddr:
+					ip = v.IP
+				default:
+					continue
+				}
+				if ip == nil || ip.IsLoopback() || ip.IsMulticast() || ip.IsUnspecified() {
+					continue
+				}
+				if ip.IsLinkLocalUnicast() {
+					continue
+				}
+
+				var base string
+				if ip4 := ip.To4(); ip4 != nil {
+					base = fmt.Sprintf("/ip4/%s/tcp/%s", ip4.String(), tcpPort)
+				} else {
+					base = fmt.Sprintf("/ip6/%s/tcp/%s", ip.String(), tcpPort)
+				}
+				dial := base + "/p2p/" + peerID
+				if !shareSeen[dial] {
+					shareSeen[dial] = true
+					shareAddrs = append(shareAddrs, dial)
+				}
+			}
 		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"online":    true,
-		"peer_id":   key.ID().String(),
-		"peers":     peerCount,
-		"addresses": addrs,
-		"data_dir":  currentDataDir,
+		"online":          true,
+		"peer_id":         peerID,
+		"peers":           peerCount,
+		"addresses":       addrs,
+		"share_addresses": shareAddrs,
+		"data_dir":        currentDataDir,
 	})
 }
 
