@@ -11,6 +11,7 @@ import { storeToRefs } from 'pinia';
 import FileTable from '@/components/file/FileTable.vue';
 import SharedFileModal from '@/components/file/SharedFileModal.vue';
 import FolderPreviewModal from '@/components/file/FolderPreviewModal.vue';
+import FilePreviewModal from '@/components/file/FilePreviewModal.vue';
 import api from '@/api';
 
 const sharedStore = useSharedStore();
@@ -27,6 +28,11 @@ const sharedModalData = ref<any>(null);
 
 const showFolderModal = ref(false);
 const selectedFolder = ref<any>(null);
+
+const showPreviewModal = ref(false);
+const previewUrl = ref('');
+const previewName = ref('');
+const previewMime = ref('');
 
 // Search State
 const searchStatus = ref('idle');
@@ -215,7 +221,8 @@ const handlePreview = (file: any, password?: string) => {
 
     // Append encryption params if known
     if (file.encryption_type === 'password') {
-        let pw = password || '';
+        // Fix: Check file.password (from FileTable emit) as well
+        let pw = password || file.password || '';
         if (file.embedded_password) {
             pw = file.embedded_password;
         }
@@ -249,7 +256,16 @@ const handlePreview = (file: any, password?: string) => {
         url += `?${params.toString()}`;
     }
     
-    window.open(url, '_blank');
+    // Check for In-App Preview (Images / Text / PDF)
+    const mime = file.mime_type || '';
+    if (mime.startsWith('image/') || mime.startsWith('text/') || mime === 'application/pdf') {
+        previewUrl.value = url;
+        previewName.value = file.name;
+        previewMime.value = mime;
+        showPreviewModal.value = true;
+    } else {
+        window.open(url, '_blank');
+    }
 };
 
 const handleDownload = async (file: any, password?: string) => {
@@ -506,6 +522,15 @@ const onModalPin = () => {
             :cid="selectedFolder.cid"
             :name="selectedFolder.name"
             @close="showFolderModal = false"
+            @preview="handlePreview"
+        />
+
+        <FilePreviewModal
+            :is-open="showPreviewModal"
+            :url="previewUrl"
+            :name="previewName"
+            :mime-type="previewMime"
+            @close="showPreviewModal = false"
         />
 
     </div>

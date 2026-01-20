@@ -186,6 +186,7 @@ const formatDate = (dateStr: string) => {
       :cid="selectedFile.cid"
       :name="selectedFile.name"
       @close="showFolderModal = false"
+      @preview="(file) => $emit('preview', file)"
     />
   </div>
 </template>

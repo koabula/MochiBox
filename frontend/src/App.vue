@@ -11,6 +11,7 @@ import FileTable from '@/components/file/FileTable.vue';
 import UploadModal from '@/components/file/UploadModal.vue';
 import SharedPage from '@/components/file/SharedPage.vue';
 import ShareExportModal from '@/components/file/ShareExportModal.vue';
+import FilePreviewModal from '@/components/file/FilePreviewModal.vue';
 import TaskList from '@/components/task/TaskList.vue';
 import NetworkPage from '@/components/network/NetworkPage.vue';
 import WindowControls from '@/components/layout/WindowControls.vue';
@@ -39,6 +40,11 @@ const showUploadModal = ref(false);
 const showShareExportModal = ref(false);
 const shareExportFile = ref<any>(null);
 const isDark = ref(localStorage.getItem('theme') === 'dark');
+
+const showPreviewModal = ref(false);
+const previewUrl = ref('');
+const previewName = ref('');
+const previewMime = ref('');
 
 const toggleTheme = () => {
   isDark.value = !isDark.value;
@@ -121,7 +127,17 @@ const handlePreview = (file: any) => {
     if (file.password) {
         url += `?password=${encodeURIComponent(file.password)}`;
     }
-    window.open(url, '_blank');
+    
+    // Check for In-App Preview (Images / Text / PDF)
+    const mime = file.mime_type || '';
+    if (mime.startsWith('image/') || mime.startsWith('text/') || mime === 'application/pdf') {
+        previewUrl.value = url;
+        previewName.value = file.name;
+        previewMime.value = mime;
+        showPreviewModal.value = true;
+    } else {
+        window.open(url, '_blank');
+    }
 };
 
 const handleDownload = async (file: any) => {
@@ -485,6 +501,14 @@ const handleUpdateDataDir = async () => {
         :is-open="showShareExportModal"
         :file="shareExportFile"
         @close="showShareExportModal = false"
+    />
+
+    <FilePreviewModal
+        :is-open="showPreviewModal"
+        :url="previewUrl"
+        :name="previewName"
+        :mime-type="previewMime"
+        @close="showPreviewModal = false"
     />
 
     <!-- Uploading Overlay -->

@@ -9,32 +9,11 @@ const props = defineProps<{
   name: string
 }>();
 
-const emit = defineEmits(['close']);
+const emit = defineEmits(['close', 'preview']);
 
 interface DirItem {
     name: string;
-    cid: string; // Wait, ListDirectory only returns name currently? No, we updated it to assume name-based resolution?
-    // Actually backend implementation in node.go ListDirectory:
-    // We didn't fix CID retrieval for children yet in previous turn!
-    // The previous plan mentioned "Let's defer CID resolution".
-    // So current ListDirectory returns empty CID or problematic CID?
-    // Let's check backend implementation again.
-    // Wait, I updated node.go but commented out CID resolution logic because of complexity.
-    // If I don't have CID, I can't navigate!
-    // I need to fix backend ListDirectory first to return CIDs or use Path based navigation.
-    // If I use Path based navigation, I need an API that accepts path.
-    // API /api/files/:cid/ls takes root CID.
-    // If I want to list subdirectory, I can pass subdirectory CID.
-    // BUT I don't have subdirectory CID if ListDirectory doesn't return it.
-    
-    // Quick Fix for Backend:
-    // In node.go, we can use `stat` to get CID.
-    // Or we can just use path-based listing? /api/files/:rootCid/ls?path=subdir
-    // Let's stick to CIDs if possible.
-    // Actually, boxo `files.Directory` entries provide `Node()`.
-    // We can cast `Node` to `ProtoNode` to get CID?
-    // Let's assume for now I will fix backend to return CIDs.
-    
+    cid: string;
     size: number;
     type: string;
 }
@@ -69,6 +48,29 @@ async function fetchItems(cid: string) {
     }
 }
 
+// Helper to guess mime type from extension
+const getMimeType = (filename: string) => {
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    const map: Record<string, string> = {
+        'png': 'image/png',
+        'jpg': 'image/jpeg',
+        'jpeg': 'image/jpeg',
+        'gif': 'image/gif',
+        'svg': 'image/svg+xml',
+        'webp': 'image/webp',
+        'txt': 'text/plain',
+        'md': 'text/markdown',
+        'json': 'application/json',
+        'js': 'application/javascript',
+        'ts': 'text/plain',
+        'html': 'text/html',
+        'css': 'text/css',
+        'xml': 'text/xml',
+        'pdf': 'application/pdf'
+    };
+    return map[ext] || 'application/octet-stream';
+};
+
 const handleNavigate = (item: DirItem) => {
     if (item.type === 'dir') {
         // Push to stack
@@ -82,8 +84,14 @@ const handleNavigate = (item: DirItem) => {
     } else {
         // Preview File
         if (!item.cid) return;
-        const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
-        window.open(`${baseUrl}/preview/${item.cid}`, '_blank');
+        
+        // Emit preview event instead of window.open
+        emit('preview', {
+            cid: item.cid,
+            name: item.name,
+            mime_type: getMimeType(item.name),
+            is_folder: false
+        });
     }
 };
 
@@ -145,7 +153,7 @@ const formatSize = (bytes: number) => {
                 <h3 class="font-bold text-lg text-nord-1 dark:text-nord-6 truncate max-w-md">Folder Preview</h3>
             </div>
             <button @click="$emit('close')" class="text-nord-3 hover:text-nord-1 dark:text-nord-4 dark:hover:text-white">
-              <X class="w-5 h-5" />
+                <X class="w-5 h-5" />
             </button>
         </div>
         
