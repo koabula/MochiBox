@@ -4,27 +4,36 @@ import { ref } from 'vue';
 export interface Toast {
   id: number;
   message: string;
-  type: 'success' | 'error' | 'info';
+  type: 'success' | 'error' | 'info' | 'warning';
 }
 
 export const useToastStore = defineStore('toast', () => {
   const toasts = ref<Toast[]>([]);
   let nextId = 1;
 
-  function show(message: string, type: 'success' | 'error' | 'info' = 'info') {
+  function show(message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info'): number {
     const id = nextId++;
     toasts.value.push({ id, message, type });
     setTimeout(() => {
       remove(id);
     }, 3000);
+    return id;
   }
 
-  function success(message: string) {
-    show(message, 'success');
+  function success(message: string): number {
+    return show(message, 'success');
   }
 
-  function error(message: string) {
-    show(message, 'error');
+  function error(message: string): number {
+    return show(message, 'error');
+  }
+
+  function info(message: string): number {
+    return show(message, 'info');
+  }
+
+  function warning(message: string): number {
+    return show(message, 'warning');
   }
 
   function remove(id: number) {
@@ -34,5 +43,5 @@ export const useToastStore = defineStore('toast', () => {
     }
   }
 
-  return { toasts, show, success, error, remove };
+  return { toasts, show, success, error, info, warning, remove };
 });

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -221,37 +222,71 @@ func (s *Server) handleNodeStatus(c *gin.Context) {
 }
 
 func (s *Server) handleBootstrap(c *gin.Context) {
-	// Standard IPFS Bootstrap Nodes
+	s.BoostMutex.Lock()
+	if s.IsBoosting {
+		s.BoostMutex.Unlock()
+		c.JSON(http.StatusConflict, gin.H{"status": "running", "message": "Network boost is already running"})
+		return
+	}
+	s.IsBoosting = true
+	s.BoostMutex.Unlock()
+
+	defer func() {
+		s.BoostMutex.Lock()
+		s.IsBoosting = false
+		s.BoostMutex.Unlock()
+	}()
+
+	// Standard IPFS Bootstrap Nodes + Cloudflare
 	bootstrapPeers := []string{
 		"/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
 		"/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
 		"/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9CkJg6M6VMcMG_Qx",
 		"/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
 		"/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+		// Cloudflare
+		"/dnsaddr/bootstrap.cloudflare-ipfs.com/ipfs/QmcFf2FH3CEgTNHeMRGhN7HNHU1EXAxoEk6EFuSyXCsvRE",
 	}
 
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-		// 1. Connect to Bootstrap Peers
-		for _, addrStr := range bootstrapPeers {
-			addrInfo, err := peer.AddrInfoFromString(addrStr)
-			if err == nil {
-				go func(info *peer.AddrInfo) {
-					s.Node.IPFS.Swarm().Connect(ctx, *info)
-				}(addrInfo)
-			}
-		}
+	var wg sync.WaitGroup
 
-		// 2. Announce Self to DHT (FindPeer Self)
-		// This forces a lookup which connects to more peers
-		selfKey, err := s.Node.IPFS.Key().Self(ctx)
+	// 1. Connect to Bootstrap Peers
+	for _, addrStr := range bootstrapPeers {
+		addrInfo, err := peer.AddrInfoFromString(addrStr)
 		if err == nil {
-			// We ignore the error here as we just want to trigger the side effect of finding peers
-			_, _ = s.Node.IPFS.Routing().FindPeer(ctx, selfKey.ID())
+			wg.Add(1)
+			go func(info *peer.AddrInfo) {
+				defer wg.Done()
+				// We ignore errors here as we just want to try connecting
+				_ = s.Node.IPFS.Swarm().Connect(ctx, *info)
+			}(addrInfo)
 		}
+	}
+
+	// Wait for all connection attempts (or timeout)
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
 	}()
 
-	c.JSON(http.StatusOK, gin.H{"message": "Network boost initiated"})
+	select {
+	case <-done:
+		// All connections attempted
+	case <-ctx.Done():
+		// Timeout reached
+	}
+
+	// 2. Announce Self to DHT (FindPeer Self)
+	// This forces a lookup which connects to more peers
+	selfKey, err := s.Node.IPFS.Key().Self(ctx)
+	if err == nil {
+		// We ignore the error here as we just want to trigger the side effect of finding peers
+		_, _ = s.Node.IPFS.Routing().FindPeer(ctx, selfKey.ID())
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Network boost finished"})
 }

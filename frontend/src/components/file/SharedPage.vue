@@ -45,9 +45,20 @@ onMounted(() => {
     // Auto-boost network if peers count is low (e.g. < 20)
     // This helps when the node has been idle for a long time
     if (networkStore.status.peers < 20) {
-         api.post('/system/bootstrap').catch(() => {
-             // Ignore errors for auto-boost
-         });
+        const toastId = toastStore.info('Boost Network Started');
+        api.post('/system/bootstrap')
+            .then(() => {
+                toastStore.success('Boost Network Finished');
+            })
+            .catch((e: any) => {
+                if (e.response && e.response.status === 409) {
+                    toastStore.remove(toastId);
+                    toastStore.warning('Boost Network is running');
+                } else {
+                    // Ignore other errors for auto-boost to avoid spamming error toasts
+                    console.warn('Auto-boost failed', e);
+                }
+            });
     }
 });
 

@@ -44,11 +44,18 @@ const handleConnect = async () => {
 };
 
 const handleBoost = async () => {
-    toastStore.success('Boosting network connection...');
+    const toastId = toastStore.info('Boost Network Started');
     try {
         await api.post('/system/bootstrap');
-    } catch (e) {
-        console.error(e);
+        toastStore.success('Boost Network Finished');
+    } catch (e: any) {
+        if (e.response && e.response.status === 409) {
+             toastStore.remove(toastId);
+             toastStore.warning('Boost Network is running');
+        } else {
+            console.error(e);
+            toastStore.error('Boost failed');
+        }
     }
 };
 

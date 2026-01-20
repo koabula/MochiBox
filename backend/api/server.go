@@ -2,6 +2,7 @@ package api
 
 import (
 	"mochibox-core/core"
+	"sync"
 	// "mochibox-core/db" // Used in handle functions but maybe not directly in NewServer signature if we pass *gorm.DB
 
 	"github.com/gin-gonic/gin"
@@ -15,6 +16,10 @@ type Server struct {
 	IpfsManager *core.IpfsManager
 	AccountManager *core.AccountManager
 	ShutdownChan chan bool
+	
+	// Network Boost State
+	BoostMutex   sync.Mutex
+	IsBoosting   bool
 }
 
 func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManager, accMgr *core.AccountManager) *Server {
