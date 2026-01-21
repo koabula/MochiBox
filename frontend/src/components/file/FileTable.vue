@@ -52,12 +52,12 @@ const truncateKey = (key: string) => {
 };
 
 const copyKey = async (key: string) => {
-    try {
-        await navigator.clipboard.writeText(key);
+    const success = await copyToClipboard(key);
+    if (success) {
         copiedKey.value = key;
         setTimeout(() => copiedKey.value = null, 2000);
         toast.success('Public Key copied to clipboard');
-    } catch (e) {
+    } else {
         toast.error('Failed to copy key');
     }
 };

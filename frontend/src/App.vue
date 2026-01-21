@@ -98,9 +98,12 @@ watch(currentTab, async (newTab) => {
 
 const handleUpload = async (data: any) => {
     try {
-        await fileStore.uploadFile(data.file, data.options);
         showUploadModal.value = false;
         toastStore.success('File upload started in background');
+        
+        fileStore.uploadFile(data.file, data.options).catch(e => {
+            toastStore.error('Upload failed: ' + (e.message || 'Unknown error'));
+        });
     } catch (e) {
         toastStore.error('Upload failed to start');
     }

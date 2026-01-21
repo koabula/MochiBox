@@ -3,6 +3,7 @@ import { Copy, X, Shield, Link, Network } from 'lucide-vue-next';
 import { useToastStore } from '@/stores/toast';
 import { ref } from 'vue';
 import api from '@/api';
+import { copyToClipboard } from '@/utils/clipboard';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -109,9 +110,13 @@ const handleCopy = async () => {
         const base64Str = btoa(binary);
         const shareLink = `mochi://${base64Str}`;
         
-        await navigator.clipboard.writeText(shareLink);
-        toast.success('Mochi Link copied to clipboard!');
-        emit('close');
+        const success = await copyToClipboard(shareLink);
+        if (success) {
+            toast.success('Mochi Link copied to clipboard!');
+            emit('close');
+        } else {
+            toast.error('Failed to copy to clipboard');
+        }
     } catch (e: any) {
         console.error(e);
         toast.error('Failed to copy: ' + (e.message || 'Unknown error'));

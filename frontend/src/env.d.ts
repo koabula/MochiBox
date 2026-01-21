@@ -8,3 +8,16 @@ declare module '*.vue' {
 
 declare const __APP_VERSION__: string
 
+interface Window {
+  electronAPI?: {
+    minimize: () => void;
+    maximize: () => void;
+    close: () => void;
+    restart: () => void;
+    clipboard: {
+      writeText: (text: string) => void;
+      readText: () => string;
+    };
+  };
+}
+

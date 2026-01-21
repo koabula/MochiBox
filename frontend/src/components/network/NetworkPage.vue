@@ -68,9 +68,13 @@ onUnmounted(() => {
     if (intervalId) clearInterval(intervalId);
 });
 
-const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toastStore.success("Copied to clipboard");
+const copyText = async (text: string) => {
+    const success = await copyToClipboard(text);
+    if (success) {
+        toastStore.success('Copied to clipboard');
+    } else {
+        toastStore.error('Failed to copy to clipboard');
+    }
 };
 </script>
 
@@ -190,7 +194,7 @@ const copyToClipboard = (text: string) => {
                                                 {{ peer.id }}
                                             </div>
                                         </div>
-                                        <button @click="copyToClipboard(peer.id)" class="text-nord-3 hover:text-nord-10"><Copy class="w-3 h-3" /></button>
+                                        <button @click="copyText(peer.id)" class="text-nord-3 hover:text-nord-10"><Copy class="w-3 h-3" /></button>
                                     </div>
                                 </td>
                                 <td class="p-4">
@@ -218,7 +222,7 @@ const copyToClipboard = (text: string) => {
                             <code class="flex-1 font-mono text-xs text-nord-2 dark:text-nord-4 break-all">
                                 {{ addr.includes('/p2p/') ? addr : `${addr}/p2p/${networkStore.status.peer_id}` }}
                             </code>
-                            <button @click="copyToClipboard(addr.includes('/p2p/') ? addr : `${addr}/p2p/${networkStore.status.peer_id}`)" class="opacity-0 group-hover:opacity-100 p-1 text-nord-3 hover:text-nord-10 transition-opacity">
+                            <button @click="copyText(addr.includes('/p2p/') ? addr : `${addr}/p2p/${networkStore.status.peer_id}`)" class="opacity-0 group-hover:opacity-100 p-1 text-nord-3 hover:text-nord-10 transition-opacity">
                                 <Copy class="w-4 h-4" />
                             </button>
                         </div>

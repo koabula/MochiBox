@@ -1,3 +1,32 @@
+<script setup lang="ts">
+import { Activity, Copy } from 'lucide-vue-next';
+import { copyToClipboard } from '@/utils/clipboard';
+import { useToastStore } from '@/stores/toast';
+
+const props = defineProps<{
+  isOpen: boolean;
+  info: any;
+}>();
+
+const emit = defineEmits(['close']);
+const toastStore = useToastStore();
+
+const close = () => {
+  emit('close');
+};
+
+const copyText = async (text: string) => {
+  if (text) {
+    const success = await copyToClipboard(text);
+    if (success) {
+      toastStore.success('Copied to clipboard');
+    } else {
+      toastStore.error('Failed to copy to clipboard');
+    }
+  }
+};
+</script>
+
 <template>
   <div v-if="isOpen" class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm" @click="close">
     <div class="bg-white dark:bg-nord-3 rounded-lg shadow-xl w-full max-w-lg p-6 relative border border-nord-4 dark:border-nord-2" @click.stop>
@@ -25,7 +54,7 @@
             <code class="flex-1 bg-nord-5 dark:bg-nord-0 p-2 rounded text-xs font-mono break-all text-nord-1 dark:text-nord-5 border border-nord-4 dark:border-nord-1">
               {{ info.peer_id || 'Generating...' }}
             </code>
-            <button @click="copyToClipboard(info.peer_id)" class="p-2 hover:bg-nord-4 dark:hover:bg-nord-2 rounded text-nord-3 dark:text-nord-4 transition-colors" title="Copy Peer ID">
+            <button @click="copyText(info.peer_id)" class="p-2 hover:bg-nord-4 dark:hover:bg-nord-2 rounded text-nord-3 dark:text-nord-4 transition-colors" title="Copy Peer ID">
               <Copy class="w-4 h-4" />
             </button>
           </div>
@@ -62,29 +91,3 @@
     </div>
   </div>
 </template>
-
-<script setup lang="ts">
-import { Activity, Copy } from 'lucide-vue-next';
-
-defineProps<{
-  isOpen: boolean;
-  info: {
-    online: boolean;
-    peer_id: string;
-    peers: number;
-    addresses: string[];
-  };
-}>();
-
-const emit = defineEmits(['close']);
-
-const close = () => {
-  emit('close');
-};
-
-const copyToClipboard = (text: string) => {
-  if (text) {
-    navigator.clipboard.writeText(text);
-  }
-};
-</script>

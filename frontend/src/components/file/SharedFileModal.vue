@@ -2,6 +2,7 @@
 import { Download, Eye, FileText, X, Pin, Lock, Globe, UserCheck, Copy } from 'lucide-vue-next';
 import { ref, watch, computed } from 'vue';
 import { useToastStore } from '@/stores/toast';
+import { copyToClipboard } from '@/utils/clipboard';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -30,22 +31,23 @@ const handleAction = (action: 'preview' | 'download') => {
 
 const copyCID = async () => {
     if (props.sharedData?.cid) {
-        try {
-            await navigator.clipboard.writeText(props.sharedData.cid);
+        const success = await copyToClipboard(props.sharedData.cid);
+        if (success) {
             toastStore.success('CID copied');
-        } catch {
+        } else {
             toastStore.error('Failed to copy');
         }
     }
 };
 
 const copyConnectReport = async () => {
-    try {
-        const report = props.connectResult ? JSON.stringify(props.connectResult, null, 2) : '';
-        if (!report) return;
-        await navigator.clipboard.writeText(report);
+    const report = props.connectResult ? JSON.stringify(props.connectResult, null, 2) : '';
+    if (!report) return;
+    
+    const success = await copyToClipboard(report);
+    if (success) {
         toastStore.success('Connect report copied');
-    } catch {
+    } else {
         toastStore.error('Failed to copy');
     }
 };

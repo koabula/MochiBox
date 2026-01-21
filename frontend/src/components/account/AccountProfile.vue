@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import { useAccountStore } from '@/stores/account';
 import { LogOut, Shield, Key, Copy, Eye, EyeOff } from 'lucide-vue-next';
 import { useToastStore } from '@/stores/toast';
+import { copyToClipboard } from '@/utils/clipboard';
 
 const accountStore = useAccountStore();
 const toastStore = useToastStore();
@@ -21,10 +22,10 @@ const confirmPassword = ref('');
 
 const copyId = async () => {
     if (!profile.value?.public_key) return;
-    try {
-        await navigator.clipboard.writeText(profile.value.public_key);
+    const success = await copyToClipboard(profile.value.public_key);
+    if (success) {
         toastStore.success('ID copied to clipboard');
-    } catch (e) {
+    } else {
         toastStore.error('Failed to copy ID');
     }
 };
@@ -89,9 +90,13 @@ const closeChangePwModal = () => {
     confirmPassword.value = '';
 };
 
-const copyMnemonic = () => {
-    navigator.clipboard.writeText(mnemonic.value);
-    toastStore.success('Copied to clipboard');
+const copyMnemonic = async () => {
+    const success = await copyToClipboard(mnemonic.value);
+    if (success) {
+        toastStore.success('Copied to clipboard');
+    } else {
+        toastStore.error('Failed to copy mnemonic');
+    }
 };
 
 </script>

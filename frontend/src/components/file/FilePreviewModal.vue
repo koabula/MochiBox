@@ -2,6 +2,7 @@
 import { ref, watch, computed } from 'vue';
 import { X, ExternalLink, Copy, Loader2, Check } from 'lucide-vue-next';
 import { useToastStore } from '@/stores/toast';
+import { copyToClipboard } from '@/utils/clipboard';
 
 const props = defineProps<{
   isOpen: boolean;
@@ -57,7 +58,11 @@ const fetchText = async () => {
 const handleCopy = async () => {
     try {
         if (isText.value) {
-            await navigator.clipboard.writeText(textContent.value);
+            const success = await copyToClipboard(textContent.value);
+            if (!success) {
+                toastStore.error('Failed to copy content');
+                return;
+            }
             toastStore.success('Text content copied to clipboard');
         } else if (isImage.value) {
              // Fetch blob and copy to clipboard

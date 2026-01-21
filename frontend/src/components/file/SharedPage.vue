@@ -13,6 +13,7 @@ import SharedFileModal from '@/components/file/SharedFileModal.vue';
 import FolderPreviewModal from '@/components/file/FolderPreviewModal.vue';
 import FilePreviewModal from '@/components/file/FilePreviewModal.vue';
 import api from '@/api';
+import { copyToClipboard } from '@/utils/clipboard';
 
 const sharedStore = useSharedStore();
 const toastStore = useToastStore();
@@ -315,70 +316,10 @@ const handleDownload = async (file: any, password?: string) => {
          return;
     }
 
-    // Determine Strategy
-    // Strategy A: Frontend FileSystem API / Blob (Interactive or Fallback)
-    // Strategy B: Backend Silent Download (Only if path set, ask disabled, and file not encrypted)
-    
-    // Note: Backend currently does not support stateless encrypted download easily.
-    // So we force Encrypted files to use Frontend Download for now.
-    const isEncrypted = file.encryption_type === 'password' || file.encryption_type === 'private';
-    const useBackendSilent = !settingsStore.askPath && settingsStore.downloadPath && !isEncrypted;
-
     const taskId = taskStore.addTask('download', filename);
     toastStore.success(`Download started for ${filename}`);
 
     try {
-        if (useBackendSilent) {
-             // Strategy B: Backend Silent
-             await taskStore.startBackendDownload(file.cid, filename, pw); // Note: Need to adjust signature of startBackendDownload to accept CID? 
-             // Wait, startBackendDownload in tasks.ts accepts fileId (number). But here we only have CID potentially?
-             // Actually backend handleDownloadShared accepts CID.
-             // But startBackendDownload currently maps to /tasks/download/start which expects file_id.
-             // We need to support CID-based task start in backend tasks.go and frontend tasks.ts.
-             // Or we fallback to frontend download if silent is not supported for CID-only.
-             
-             // Let's fallback to Frontend Download for Shared files for now to be safe, 
-             // unless we update backend to support CID tasks.
-             // Updating backend is better.
-             // But for this immediate fix, let's use Frontend Download which now supports Pause/Resume/Speed.
-             
-             // Strategy A: Frontend Download (Interactive or Silent Blob)
-             let fileHandle = null;
-             
-             if (settingsStore.askPath) {
-                 try {
-                    // @ts-ignore
-                    if (window.showSaveFilePicker) {
-                        // @ts-ignore
-                        fileHandle = await window.showSaveFilePicker({
-                            suggestedName: filename
-                        });
-                    }
-                 } catch (err: any) {
-                     if (err.name === 'AbortError') {
-                         taskStore.removeTask(taskId);
-                         return;
-                     }
-                 }
-             }
-             
-             // Construct URL
-             const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
-             let url = `${baseUrl}/preview/${file.cid}?download=true`;
-             const params = new URLSearchParams();
-             if (pw) params.append('password', pw);
-             if (file.encryption_meta) params.append('meta', file.encryption_meta);
-             if (file.encryption_type) params.append('type', file.encryption_type);
-             if (params.toString()) url += `&${params.toString()}`;
-             
-             // Use TaskStore
-             taskStore.startDownload(url, filename, fileHandle, taskId);
-             return;
-        }
-        
-        // ... (Same logic as above for non-silent)
-        // Actually we can merge them.
-        
         let fileHandle = null;
         if (settingsStore.askPath) {
              try {
@@ -414,17 +355,20 @@ const handleDownload = async (file: any, password?: string) => {
     }
 };
 
-const handleShare = (file: any) => {
+const handleShare = async (file: any) => {
     // Prefer original link if available
-    if (file.original_link) {
-        navigator.clipboard.writeText(file.original_link);
-        toastStore.success('Mochi Link copied to clipboard');
-        return;
+    const textToCopy = file.original_link || file.cid;
+    const success = await copyToClipboard(textToCopy);
+    
+    if (success) {
+        if (file.original_link) {
+            toastStore.success('Mochi Link copied to clipboard');
+        } else {
+            toastStore.success('CID copied to clipboard (No Link Metadata)');
+        }
+    } else {
+        toastStore.error('Failed to copy to clipboard');
     }
-
-    // Copy CID to clipboard
-    navigator.clipboard.writeText(file.cid);
-    toastStore.success('CID copied to clipboard (No Link Metadata)');
 };
 
 const handlePin = async (file: any) => {
