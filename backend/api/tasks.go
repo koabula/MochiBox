@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -17,7 +16,6 @@ import (
 	"time"
 
 	"mochibox-core/core"
-	"mochibox-core/crypto"
 	"mochibox-core/db"
 
 	"github.com/gin-gonic/gin"
@@ -268,25 +266,31 @@ func (s *Server) getDownloadTask(id string) *DownloadTask {
 }
 
 func (s *Server) runDownloadTask(ctx context.Context, task *DownloadTask) {
-	// Boost connection limits for this download
+	// Step 1: Boost connection limits BEFORE warming up
+	log.Printf("Task %s: Boosting connection limits for %s", task.ID, task.CID)
 	if err := s.ConnectionManager.BoostForDownload(task.CID); err != nil {
 		log.Printf("Warning: Failed to boost connections: %v", err)
 	}
 	defer s.ConnectionManager.RestoreDefaults(task.CID)
 
-	// Warmup providers if not already done
-	go func() {
-		warmupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		if err := s.DownloadBooster.WarmupCID(warmupCtx, task.CID); err != nil {
-			log.Printf("Warning: Provider warmup failed: %v", err)
-		}
-	}()
+	// Step 2: Synchronously warm up providers and wait for completion
+	log.Printf("Task %s: Warming up providers for %s", task.ID, task.CID)
+	warmupCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
 
-	// Check for existing partial download
+	if err := s.DownloadBooster.WarmupCID(warmupCtx, task.CID); err != nil {
+		log.Printf("Task %s: Warmup failed: %v, continuing anyway", task.ID, err)
+	} else {
+		log.Printf("Task %s: Warmup completed successfully", task.ID)
+		// Give connections a moment to stabilize
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// Step 3: Check for existing partial download
 	offset := int64(0)
 	if st, err := os.Stat(task.DestPath); err == nil {
 		offset = st.Size()
+		log.Printf("Task %s: Resuming from offset %d", task.ID, offset)
 	}
 
 	task.mu.Lock()
@@ -294,32 +298,30 @@ func (s *Server) runDownloadTask(ctx context.Context, task *DownloadTask) {
 	task.UpdatedAt = time.Now()
 	task.mu.Unlock()
 
-	// Get file from IPFS (try parallel download for large files)
+	// Step 4: Determine download strategy
 	var file db.File
-	useParallel := false
-	useOptimizedEncryption := false
+	hasPassword := task.Password != ""
+	useEncryptedDownload := false
+
 	if err := s.DB.First(&file, task.FileID).Error; err == nil {
-		// Use parallel download for files > 10MB without encryption
-		if file.Size > 10*1024*1024 && offset == 0 && task.Password == "" {
-			useParallel = true
-		}
-		// Use optimized encryption for password-protected files
-		if task.Password != "" {
-			useOptimizedEncryption = true
+		if hasPassword {
+			useEncryptedDownload = true
+			log.Printf("Task %s: Using encrypted parallel download", task.ID)
 		}
 	}
 
-	// Open destination file with AsyncWriter for better performance
+	// Step 5: Open destination file with AsyncWriter
 	var dstWriter io.WriteCloser
 	var err error
+
 	if offset > 0 {
-		// Resume: use AsyncWriter in append mode
-		dstWriter, err = core.OpenAsyncWriter(task.DestPath, 4*1024*1024, true)
-	} else {
-		// New download: create AsyncWriter
-		dstWriter, err = core.NewAsyncWriter(task.DestPath, 4*1024*1024)
+		// Resume mode not supported for parallel downloads yet
+		log.Printf("Task %s: Resume not supported for parallel download, restarting", task.ID)
+		offset = 0
+		os.Remove(task.DestPath)
 	}
 
+	dstWriter, err = core.NewAsyncWriter(task.DestPath, 4*1024*1024)
 	if err != nil {
 		task.mu.Lock()
 		task.Status = "error"
@@ -337,237 +339,44 @@ func (s *Server) runDownloadTask(ctx context.Context, task *DownloadTask) {
 		ctx:  ctx,
 	}
 
-	// Try parallel download for large files
-	if useParallel {
-		log.Printf("Using parallel download for task %s (CID: %s)", task.ID, task.CID)
-		if err := s.ParallelDownloader.DownloadFile(ctx, task.CID, progressWriter); err != nil {
-			log.Printf("Parallel download failed, falling back to sequential: %v", err)
-			// Fallback to sequential download
-			useParallel = false
-		} else {
-			// Success
-			task.mu.Lock()
-			task.Status = "completed"
-			task.Speed = 0
-			task.UpdatedAt = time.Now()
-			task.mu.Unlock()
-			return
-		}
+	// Step 6: Execute download with appropriate strategy
+	var downloadErr error
+
+	if useEncryptedDownload {
+		// Encrypted parallel download
+		log.Printf("Task %s: Starting encrypted parallel download", task.ID)
+		encryptedDL := core.NewEncryptedDownloader(s.ParallelDownloader)
+		downloadErr = encryptedDL.DownloadAndDecrypt(ctx, task.CID, task.Password, progressWriter)
+	} else {
+		// Standard parallel download (works for files >= 1MB)
+		log.Printf("Task %s: Starting parallel download", task.ID)
+		downloadErr = s.ParallelDownloader.DownloadFile(ctx, task.CID, progressWriter)
 	}
 
-	// Try optimized direct decryption for encrypted files
-	if useOptimizedEncryption && offset == 0 {
-		log.Printf("Using optimized encryption for task %s (CID: %s)", task.ID, task.CID)
-
-		// Get encrypted stream directly from IPFS
-		reader, err := s.Node.GetFile(ctx, task.CID)
-		if err != nil {
-			log.Printf("Failed to get encrypted stream: %v, falling back to HTTP", err)
-			goto HttpFallback
-		}
-
-		// Create optimized decryption stream
-		decryptedReader, err := crypto.DecryptStream(reader, task.Password)
-		if err != nil {
-			log.Printf("Failed to create decryption stream: %v, falling back to HTTP", err)
-			goto HttpFallback
-		}
-
-		// Stream decrypted data to disk with progress tracking
-		buf := make([]byte, 1024*1024) // 1MB buffer
-		lastSpeedAt := time.Now()
-		lastSpeedLoaded := task.Loaded
-
-		for {
-			if ctx.Err() != nil {
-				return
-			}
-
-			n, rerr := decryptedReader.Read(buf)
-			if n > 0 {
-				if _, werr := progressWriter.Write(buf[:n]); werr != nil {
-					task.mu.Lock()
-					task.Status = "error"
-					task.Error = werr.Error()
-					task.UpdatedAt = time.Now()
-					task.mu.Unlock()
-					return
-				}
-
-				task.mu.Lock()
-				now := time.Now()
-				if now.Sub(lastSpeedAt) >= 500*time.Millisecond {
-					dt := now.Sub(lastSpeedAt).Seconds()
-					dl := task.Loaded - lastSpeedLoaded
-					instant := float64(dl) / dt
-					if task.Speed == 0 {
-						task.Speed = instant
-					} else {
-						task.Speed = task.Speed*0.7 + instant*0.3
-					}
-					lastSpeedAt = now
-					lastSpeedLoaded = task.Loaded
-				}
-				task.UpdatedAt = now
-				task.mu.Unlock()
-			}
-
-			if rerr == io.EOF {
-				task.mu.Lock()
-				task.Status = "completed"
-				task.Speed = 0
-				task.UpdatedAt = time.Now()
-				task.mu.Unlock()
-				return
-			}
-			if rerr != nil {
-				if ctx.Err() != nil {
-					return
-				}
-				task.mu.Lock()
-				task.Status = "error"
-				task.Error = rerr.Error()
-				task.UpdatedAt = time.Now()
-				task.mu.Unlock()
-				return
-			}
-		}
-	}
-
-HttpFallback:
-	// Sequential download via HTTP (maintains compatibility with encryption/password)
-	reqURL := fmt.Sprintf("%s/api/preview/%s?download=true", localBaseURL(), task.CID)
-	if task.Password != "" {
-		reqURL += "&password=" + urlQueryEscape(task.Password)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		task.mu.Lock()
-		task.Status = "error"
-		task.Error = err.Error()
-		task.UpdatedAt = time.Now()
-		task.mu.Unlock()
-		return
-	}
-
-	if offset > 0 {
-		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
-	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
+	// Step 7: Handle result
+	if downloadErr != nil {
 		if ctx.Err() != nil {
+			// Context cancelled (user paused/cancelled)
 			return
 		}
-		task.mu.Lock()
-		task.Status = "error"
-		task.Error = err.Error()
-		task.UpdatedAt = time.Now()
-		task.mu.Unlock()
-		return
-	}
-	defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		log.Printf("Task %s: Download failed: %v", task.ID, downloadErr)
 		task.mu.Lock()
 		task.Status = "error"
-		task.Error = fmt.Sprintf("upstream status %d: %s", resp.StatusCode, strings.TrimSpace(string(b)))
+		task.Error = downloadErr.Error()
 		task.UpdatedAt = time.Now()
 		task.mu.Unlock()
 		return
 	}
 
-	if offset > 0 && resp.StatusCode == http.StatusOK {
-		offset = 0
-		task.mu.Lock()
-		task.Loaded = 0
-		task.UpdatedAt = time.Now()
-		task.mu.Unlock()
-
-		// For AsyncWriter, we need to seek and truncate
-		if asyncWriter, ok := dstWriter.(io.Seeker); ok {
-			asyncWriter.Seek(0, io.SeekStart)
-			if f, ok := asyncWriter.(*core.AsyncWriter); ok {
-				// Close and recreate to truncate
-				f.Close()
-				dstWriter, err = core.NewAsyncWriter(task.DestPath, 4*1024*1024)
-				if err != nil {
-					task.mu.Lock()
-					task.Status = "error"
-					task.Error = err.Error()
-					task.UpdatedAt = time.Now()
-					task.mu.Unlock()
-					return
-				}
-				defer dstWriter.Close()
-				progressWriter.dst = dstWriter
-			}
-		}
-	}
-
-	// Use larger buffer for better performance
-	buf := make([]byte, 1024*1024) // 1MB buffer
-	lastSpeedAt := time.Now()
-	lastSpeedLoaded := task.Loaded
-
-	for {
-		if ctx.Err() != nil {
-			return
-		}
-
-		n, rerr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, werr := dstWriter.Write(buf[:n]); werr != nil {
-				task.mu.Lock()
-				task.Status = "error"
-				task.Error = werr.Error()
-				task.UpdatedAt = time.Now()
-				task.mu.Unlock()
-				return
-			}
-
-			task.mu.Lock()
-			task.Loaded += int64(n)
-			now := time.Now()
-			if now.Sub(lastSpeedAt) >= 500*time.Millisecond {
-				dt := now.Sub(lastSpeedAt).Seconds()
-				dl := task.Loaded - lastSpeedLoaded
-				instant := float64(dl) / dt
-				if task.Speed == 0 {
-					task.Speed = instant
-				} else {
-					task.Speed = task.Speed*0.7 + instant*0.3
-				}
-				lastSpeedAt = now
-				lastSpeedLoaded = task.Loaded
-			}
-			task.UpdatedAt = now
-			task.mu.Unlock()
-		}
-
-		if rerr == io.EOF {
-			break
-		}
-		if rerr != nil {
-			if ctx.Err() != nil {
-				return
-			}
-			task.mu.Lock()
-			task.Status = "error"
-			task.Error = rerr.Error()
-			task.UpdatedAt = time.Now()
-			task.mu.Unlock()
-			return
-		}
-	}
-
+	// Success
 	task.mu.Lock()
 	task.Status = "completed"
 	task.Speed = 0
 	task.UpdatedAt = time.Now()
 	task.mu.Unlock()
+
+	log.Printf("Task %s: Download completed successfully", task.ID)
 }
 
 // progressWriter wraps a writer to track download progress

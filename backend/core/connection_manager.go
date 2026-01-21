@@ -169,9 +169,9 @@ func (cm *ConnectionManager) applyBoostConfig() error {
 		key   string
 		value string
 	}{
-		{"Swarm.ConnMgr.HighWater", "1200"},
-		{"Swarm.ConnMgr.LowWater", "800"},
-		{"Swarm.ConnMgr.GracePeriod", "60s"},
+		{"Swarm.ConnMgr.HighWater", "2000"},
+		{"Swarm.ConnMgr.LowWater", "1500"},
+		{"Swarm.ConnMgr.GracePeriod", "120s"},
 	}
 
 	for _, cfg := range configs {

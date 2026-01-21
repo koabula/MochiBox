@@ -7,6 +7,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ipfs/boxo/files"
+	"github.com/ipfs/boxo/path"
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
@@ -85,6 +87,9 @@ ConnectPhase:
 	// Connect to remaining providers in background
 	go db.batchConnect(context.Background(), providers, fastConnCount)
 
+	// Actively prefetch first block to trigger Bitswap session
+	go db.prefetchFirstBlock(context.Background(), cid)
+
 	log.Printf("Warmup complete for CID %s: %d providers discovered", cid, len(providers))
 	return nil
 }
@@ -150,6 +155,36 @@ func (db *DownloadBooster) batchConnect(ctx context.Context, providers []peer.Ad
 	}
 
 	wg.Wait()
+}
+
+// prefetchFirstBlock actively fetches the first block to trigger Bitswap session
+func (db *DownloadBooster) prefetchFirstBlock(ctx context.Context, cid string) {
+	prefetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	log.Printf("Prefetching first block for CID %s to establish Bitswap session", cid)
+
+	cidPath, err := path.NewPath("/ipfs/" + cid)
+	if err != nil {
+		log.Printf("Failed to create path for prefetch: %v", err)
+		return
+	}
+
+	node, err := db.node.IPFS.Unixfs().Get(prefetchCtx, cidPath)
+	if err != nil {
+		log.Printf("Prefetch failed (acceptable, will retry on actual download): %v", err)
+		return
+	}
+
+	if f, ok := node.(files.File); ok {
+		buf := make([]byte, 256*1024)
+		n, _ := f.Read(buf)
+		f.Close()
+		log.Printf("Successfully prefetched %d bytes for %s, Bitswap session established", n, cid)
+	} else if d, ok := node.(files.Directory); ok {
+		d.Close()
+		log.Printf("Prefetch discovered directory structure for %s", cid)
+	}
 }
 
 // GetCachedProviders returns cached providers for a CID

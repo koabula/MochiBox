@@ -37,22 +37,24 @@ func NewParallelDownloader(node *MochiNode, booster *DownloadBooster) *ParallelD
 	}
 }
 
-// DownloadFile downloads a file with parallel chunk fetching for large files
+// DownloadFile downloads a file with parallel chunk fetching
+// This method works for both encrypted and non-encrypted files
 func (pd *ParallelDownloader) DownloadFile(ctx context.Context, cid string, dst io.Writer) error {
 	if pd.node == nil {
 		return fmt.Errorf("node not initialized")
 	}
 
-	// Try to get file links (DAG structure)
+	// Always try parallel download first, even for single-block files
+	// If DAG structure is not available, will fallback automatically
 	links, totalSize, err := pd.getFileLinks(ctx, cid)
-	if err != nil || len(links) <= 1 {
-		// Fallback to sequential download for small files or single-block files
-		log.Printf("Using sequential download for CID %s (links: %d)", cid, len(links))
+	if err != nil || len(links) == 0 {
+		// Single block or error, use direct download
+		log.Printf("Direct download for CID %s (single block or no DAG structure)", cid)
 		return pd.fallbackDownload(ctx, cid, dst)
 	}
 
-	// Use parallel download for multi-chunk files
-	log.Printf("Starting parallel download for CID %s: %d chunks, total %d bytes", cid, len(links), totalSize)
+	// Parallel download for multi-chunk files
+	log.Printf("Parallel download for CID %s: %d chunks, total %d bytes", cid, len(links), totalSize)
 	return pd.parallelDownload(ctx, links, dst)
 }
 

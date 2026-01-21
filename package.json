@@ -2,7 +2,7 @@
   "name": "mochibox-root",
   "description": "A secure, decentralized file sharing tool powered by IPFS.",
   "license": "GPL-3.0",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "private": true,
   "workspaces": [
     "frontend",
