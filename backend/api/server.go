@@ -27,9 +27,6 @@ type Server struct {
 	DownloadBooster    *core.DownloadBooster
 	ParallelDownloader *core.ParallelDownloader
 	ConnectionManager  *core.ConnectionManager
-
-	// WebSocket hub for real-time updates
-	WSHub *WSHub
 }
 
 func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManager, accMgr *core.AccountManager) *Server {
@@ -54,10 +51,6 @@ func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManage
 	connMgr := core.NewConnectionManager(ipfsMgr)
 	parallelDL := core.NewParallelDownloader(node, booster)
 
-	// Initialize WebSocket hub
-	wsHub := NewWSHub()
-	go wsHub.Run()
-
 	s := &Server{
 		Node:               node,
 		Router:             r,
@@ -69,7 +62,6 @@ func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManage
 		DownloadBooster:    booster,
 		ParallelDownloader: parallelDL,
 		ConnectionManager:  connMgr,
-		WSHub:              wsHub,
 	}
 	s.RegisterRoutes()
 	return s
@@ -89,7 +81,6 @@ func (s *Server) RegisterRoutes() {
 		s.registerSharedRoutes(api)
 		s.registerAccountRoutes(api)
 		s.registerTaskRoutes(api)
-		s.registerWebSocketRoutes(api)
 	}
 
 	s.registerFileRoutes(s.DB)
