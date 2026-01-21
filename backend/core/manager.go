@@ -4,13 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"strconv"
 	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +28,7 @@ func NewIpfsManager(dataDir string) (*IpfsManager, error) {
 	// Find IPFS binary
 	// Development: ../electron/resources/bin/ipfs.exe
 	// Production: ./ipfs.exe (in the same dir as mochibox-core) or ../bin/ipfs.exe
-	
+
 	binName := "ipfs"
 	if runtime.GOOS == "windows" {
 		binName = "ipfs.exe"
@@ -37,12 +37,12 @@ func NewIpfsManager(dataDir string) (*IpfsManager, error) {
 	// Try multiple locations
 	possiblePaths := []string{
 		filepath.Join(filepath.Dir(os.Args[0]), binName),
-		filepath.Join(filepath.Dir(os.Args[0]), "../bin", binName), // Electron production structure
+		filepath.Join(filepath.Dir(os.Args[0]), "../bin", binName),   // Electron production structure
 		filepath.Join("..", "electron", "resources", "bin", binName), // Dev
 	}
 
 	binPath := ""
-	
+
 	// 1. Check env var first (from Electron)
 	if envPath := os.Getenv("MOCHIBOX_IPFS_BIN"); envPath != "" {
 		if _, err := os.Stat(envPath); err == nil {
@@ -94,7 +94,7 @@ func (m *IpfsManager) InitRepo() error {
 	// We avoid "server" profile for desktop use to enable MDNS/Local Discovery by default.
 	cmd := exec.Command(m.BinPath, "init")
 	cmd.Env = append(os.Environ(), "IPFS_PATH="+m.DataDir)
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("ipfs init failed: %v, output: %s", err, string(output))
@@ -121,28 +121,49 @@ func (m *IpfsManager) ConfigRepo() error {
 		{"API.HTTPHeaders.Access-Control-Allow-Methods", `["PUT", "POST", "GET"]`},
 		{"Discovery.MDNS.Enabled", strconv.FormatBool(mdnsEnabled)},
 		{"Pubsub.Router", `"gossipsub"`},
-		
+
 		// Optimization: DHT & NAT
 		{"Routing.Type", `"dht"`}, // Force DHT (Server mode if possible, or auto)
 		{"Swarm.EnableAutoNATService", "true"},
 		{"Experimental.AcceleratedDHTClient", "true"}, // Fast DHT
-		
+
 		// Optimization: Connection Manager
 		// Lower watermark for client usage to save resources
 		// Update: Increased watermarks to maintain better connectivity for p2p transfers
 		{"Swarm.ConnMgr.LowWater", "100"},
 		{"Swarm.ConnMgr.HighWater", "600"},
-		
+
 		// Optimization: Relay Client & Transports
 		{"Swarm.RelayClient.Enabled", "true"},
 		{"Swarm.Transports.Network.Relay", "true"},
-		
+
 		// Optimization: QUIC & WebTransport (Faster, better roaming)
 		{"Swarm.Transports.Network.QUIC", "true"},
 		{"Swarm.Transports.Network.WebTransport", "true"},
 
 		// Feature: Filestore (No Copy)
 		{"Experimental.FilestoreEnabled", "true"},
+
+		// === Phase 1 Optimization: Enhanced IPFS Configuration ===
+
+		// Graphsync protocol (more efficient than Bitswap for large files)
+		{"Experimental.GraphsyncEnabled", "true"},
+
+		// Block storage optimization with bloom filter for faster lookups
+		{"Datastore.BloomFilterSize", "1048576"}, // 1MB bloom filter
+
+		// Resource manager to prevent resource exhaustion
+		{"Swarm.ResourceMgr.Enabled", "true"},
+		{"Swarm.ResourceMgr.MaxMemory", `"1GB"`},
+		{"Swarm.ResourceMgr.MaxFileDescriptors", "4096"},
+
+		// Reprovider optimization (for file sharers)
+		{"Reprovider.Interval", `"12h"`},   // Reduce frequency to save resources
+		{"Reprovider.Strategy", `"roots"`}, // Only announce root CIDs, not every block
+
+		// Bitswap optimization for better throughput
+		{"Swarm.Transports.Network.Bitswap.MaxOutstandingBytesPerPeer", `"5MB"`},
+		{"Swarm.Transports.Network.Bitswap.TargetMessageSize", `"2MB"`},
 	}
 
 	for _, cfg := range configs {
@@ -165,14 +186,14 @@ func (m *IpfsManager) AddPeering(ctx context.Context, multiaddr string) error {
 	// ipfs swarm peering add <multiaddr>
 	cmd := exec.CommandContext(ctx, m.BinPath, "swarm", "peering", "add", multiaddr)
 	cmd.Env = append(os.Environ(), "IPFS_PATH="+m.DataDir)
-	
+
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		// Ignore if already present or specific harmless errors if needed
 		// But usually we want to know
 		return fmt.Errorf("peering add failed: %v, out: %s", err, string(output))
 	}
-	
+
 	log.Printf("Successfully added peer to peering list: %s", multiaddr)
 	return nil
 }
@@ -226,11 +247,11 @@ func (m *IpfsManager) Start(ctx context.Context) error {
 
 	cmd := exec.CommandContext(ctx, m.BinPath, "daemon", "--enable-gc", "--enable-pubsub-experiment")
 	cmd.Env = append(os.Environ(), "IPFS_PATH="+m.DataDir)
-	
+
 	// Capture stdout/stderr for logging
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
-	
+
 	if err := cmd.Start(); err != nil {
 		log.Printf("Failed to start IPFS daemon: %v", err)
 		return err
@@ -243,7 +264,7 @@ func (m *IpfsManager) Start(ctx context.Context) error {
 	// Wait for API file to appear
 	// This confirms the daemon is ready and tells us the port
 	apiFile := filepath.Join(m.DataDir, "api")
-	
+
 	timeout := time.After(60 * time.Second)
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
@@ -257,11 +278,11 @@ func (m *IpfsManager) Start(ctx context.Context) error {
 			content, err := os.ReadFile(apiFile)
 			if err == nil && len(content) > 0 {
 				m.ApiAddr = strings.TrimSpace(string(content))
-				
+
 				// Health check: wait for API to be responsive
 				// Convert multiaddr to http
 				checkUrl := MultiaddrToHttp(m.ApiAddr) + "/api/v0/id"
-				
+
 				// Try a few times to ensure it's ready
 				for i := 0; i < 20; i++ {
 					// Use Post as IPFS RPC uses POST
@@ -275,7 +296,7 @@ func (m *IpfsManager) Start(ctx context.Context) error {
 					}
 					time.Sleep(200 * time.Millisecond)
 				}
-				
+
 				fmt.Printf("Managed IPFS Node started at %s (API check timed out)\n", m.ApiAddr)
 				return nil
 			}
@@ -326,9 +347,9 @@ func (m *IpfsManager) GetGatewayAddr() string {
 	if err == nil {
 		return strings.TrimSpace(string(content))
 	}
-	
+
 	// Fallback: Read config
-	// But since we use port 0, config just says port 0 until running? 
+	// But since we use port 0, config just says port 0 until running?
 	// Actually 'gateway' file is the reliable way for ephemeral ports.
 	return ""
 }

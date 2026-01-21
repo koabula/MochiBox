@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"sync"
@@ -35,6 +36,13 @@ func (s *Server) handleSearchShared(c *gin.Context) {
 	c.Header("Access-Control-Allow-Origin", "*")
 
 	ctx := c.Request.Context()
+
+	// Start provider discovery with warmup
+	go func() {
+		if err := s.DownloadBooster.WarmupCID(ctx, cid); err != nil {
+			log.Printf("Warmup failed for CID %s: %v", cid, err)
+		}
+	}()
 
 	provs, err := s.Node.FindProviders(ctx, cid)
 	if err != nil {
@@ -108,22 +116,22 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 				// Use a longer timeout for peering add if needed
 				pCtx, pCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer pCancel()
-				
+
 				// 1. Add to Peering (High Priority Protection)
 				if err := s.IpfsManager.AddPeering(pCtx, a); err != nil {
 					fmt.Printf("Warning: Failed to add peer to peering list: %v\n", err)
 					// Fallback: Try Connect/PeeringAdd via Node if CLI fails
 					s.Node.PeeringAdd(pCtx, a)
 				}
-				
+
 				// 2. Warmup: Send a want for the root block to trigger bitswap session establishment
 				// We don't need to wait for the result, just sending the want is enough.
 				// However, since we don't have the CID here in the connect request easily accessible (it's generic connect),
-				// we skip specific CID warmup. 
+				// we skip specific CID warmup.
 				// The user will click Preview/Download which triggers the fetch.
 				// With Peering, the connection should stay alive and robust.
 			}(addr)
-			
+
 			results[i] = connectResult{Addr: addr, OK: true}
 		}(i, addr)
 	}

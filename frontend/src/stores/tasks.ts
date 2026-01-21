@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import api from '@/api';
+import { streamDownload } from '@/utils/streamDownload';
 
 export interface Task {
   id: string;
@@ -368,5 +369,62 @@ export const useTaskStore = defineStore('tasks', () => {
       tasks.value = tasks.value.filter(t => t.id !== id);
   }
 
-  return { tasks, addTask, startBackendDownload, startDownload, pauseTask, resumeTask, updateProgress, completeTask, failTask, clearCompleted, removeTask };
+  /**
+   * Start a stream download (optimized for memory efficiency)
+   * This uses the new streamDownload utility to avoid loading entire files into memory
+   * Recommended for large files in Electron environment
+   */
+  async function startStreamDownload(url: string, filename: string) {
+    const id = addTask('download', filename);
+    const task = tasks.value.find(t => t.id === id);
+    if (!task) return;
+
+    task.status = 'running';
+    task.startTime = Date.now();
+
+    try {
+      const fullUrl = url.startsWith('http') ? url : `${api.defaults.baseURL}${url}`;
+      
+      await streamDownload(fullUrl, filename, (loaded, total) => {
+        // Update progress
+        task.loaded = loaded;
+        task.total = total;
+        if (total > 0) {
+          task.progress = Math.min(100, Math.round((loaded / total) * 100));
+        }
+
+        // Calculate speed (every update)
+        const now = Date.now();
+        const elapsed = (now - task.startTime) / 1000; // seconds
+        if (elapsed > 0) {
+          const instant = loaded / elapsed;
+          task.speed = task.speed === 0 ? instant : (task.speed * 0.7 + instant * 0.3);
+        }
+      });
+
+      // Download completed
+      task.status = 'completed';
+      task.progress = 100;
+      task.speed = 0;
+    } catch (err: any) {
+      task.status = 'error';
+      task.error = err?.message || 'Stream download failed';
+      task.speed = 0;
+    }
+  }
+
+  return { 
+    tasks, 
+    addTask, 
+    startBackendDownload, 
+    startDownload, 
+    startStreamDownload, 
+    pauseTask, 
+    resumeTask, 
+    updateProgress, 
+    completeTask, 
+    failTask, 
+    clearCompleted, 
+    removeTask 
+  };
 });

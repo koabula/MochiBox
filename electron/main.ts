@@ -53,6 +53,17 @@ function createWindow() {
     app.exit(0);
   });
 
+  // IPC Handler for stream download file append
+  ipcMain.handle('append-file', async (event, filename: string, data: Uint8Array) => {
+    try {
+      const buffer = Buffer.from(data);
+      await fs.promises.appendFile(filename, buffer);
+    } catch (error) {
+      console.error('Failed to append file:', error);
+      throw error;
+    }
+  });
+
   // Handle external links
   mainWindow.webContents.setWindowOpenHandler((details) => {
     if (details.url.startsWith('http:') || details.url.startsWith('https:')) {

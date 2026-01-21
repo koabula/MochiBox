@@ -9,26 +9,31 @@ import (
 )
 
 type Server struct {
-	Node        *core.MochiNode
-	Router      *gin.Engine
-	DB          *gorm.DB
-	IpfsManager *core.IpfsManager
+	Node           *core.MochiNode
+	Router         *gin.Engine
+	DB             *gorm.DB
+	IpfsManager    *core.IpfsManager
 	AccountManager *core.AccountManager
-	ShutdownChan chan bool
-	
+	ShutdownChan   chan bool
+
 	// Network Boost State
-	BoostMutex   sync.Mutex
-	IsBoosting   bool
+	BoostMutex sync.Mutex
+	IsBoosting bool
 
 	DownloadTasksMu sync.Mutex
 	DownloadTasks   map[string]*DownloadTask
+
+	// Network optimization components
+	DownloadBooster    *core.DownloadBooster
+	ParallelDownloader *core.ParallelDownloader
+	ConnectionManager  *core.ConnectionManager
 }
 
 func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManager, accMgr *core.AccountManager) *Server {
 	r := gin.Default()
 	// Trust only local proxies to avoid security warning
 	_ = r.SetTrustedProxies([]string{"127.0.0.1"})
-	
+
 	// CORS for Electron
 	r.Use(func(c *gin.Context) {
 		c.Writer.Header().Set("Access-Control-Allow-Origin", "*")
@@ -41,14 +46,22 @@ func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManage
 		c.Next()
 	})
 
+	// Initialize network optimization components
+	booster := core.NewDownloadBooster(node)
+	connMgr := core.NewConnectionManager(ipfsMgr)
+	parallelDL := core.NewParallelDownloader(node, booster)
+
 	s := &Server{
-		Node:        node,
-		Router:      r,
-		DB:          database,
-		IpfsManager: ipfsMgr,
-		AccountManager: accMgr,
-		ShutdownChan: make(chan bool),
-		DownloadTasks: make(map[string]*DownloadTask),
+		Node:               node,
+		Router:             r,
+		DB:                 database,
+		IpfsManager:        ipfsMgr,
+		AccountManager:     accMgr,
+		ShutdownChan:       make(chan bool),
+		DownloadTasks:      make(map[string]*DownloadTask),
+		DownloadBooster:    booster,
+		ParallelDownloader: parallelDL,
+		ConnectionManager:  connMgr,
 	}
 	s.RegisterRoutes()
 	return s
@@ -62,15 +75,15 @@ func (s *Server) RegisterRoutes() {
 	api := s.Router.Group("/api")
 	{
 		// api.GET("/files", s.handleListFiles) // Moved to registerFileRoutes
-        s.registerGatewayRoutes(api)
+		s.registerGatewayRoutes(api)
 		s.registerConfigRoutes(api)
 		s.registerSystemRoutes(api)
 		s.registerSharedRoutes(api)
 		s.registerAccountRoutes(api)
 		s.registerTaskRoutes(api)
 	}
-    
-    s.registerFileRoutes(s.DB)
+
+	s.registerFileRoutes(s.DB)
 }
 
 func (s *Server) Run(port string) error {

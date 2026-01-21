@@ -10,3 +10,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
     readText: () => clipboard.readText(),
   },
 });
+
+// Enhanced electron API for stream download support
+contextBridge.exposeInMainWorld('electron', {
+  appendFile: async (filename: string, data: Uint8Array): Promise<void> => {
+    return ipcRenderer.invoke('append-file', filename, data);
+  },
+});

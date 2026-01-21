@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +16,8 @@ import (
 	"sync"
 	"time"
 
+	"mochibox-core/core"
+	"mochibox-core/crypto"
 	"mochibox-core/db"
 
 	"github.com/gin-gonic/gin"
@@ -265,6 +268,22 @@ func (s *Server) getDownloadTask(id string) *DownloadTask {
 }
 
 func (s *Server) runDownloadTask(ctx context.Context, task *DownloadTask) {
+	// Boost connection limits for this download
+	if err := s.ConnectionManager.BoostForDownload(task.CID); err != nil {
+		log.Printf("Warning: Failed to boost connections: %v", err)
+	}
+	defer s.ConnectionManager.RestoreDefaults(task.CID)
+
+	// Warmup providers if not already done
+	go func() {
+		warmupCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := s.DownloadBooster.WarmupCID(warmupCtx, task.CID); err != nil {
+			log.Printf("Warning: Provider warmup failed: %v", err)
+		}
+	}()
+
+	// Check for existing partial download
 	offset := int64(0)
 	if st, err := os.Stat(task.DestPath); err == nil {
 		offset = st.Size()
@@ -275,6 +294,148 @@ func (s *Server) runDownloadTask(ctx context.Context, task *DownloadTask) {
 	task.UpdatedAt = time.Now()
 	task.mu.Unlock()
 
+	// Get file from IPFS (try parallel download for large files)
+	var file db.File
+	useParallel := false
+	useOptimizedEncryption := false
+	if err := s.DB.First(&file, task.FileID).Error; err == nil {
+		// Use parallel download for files > 10MB without encryption
+		if file.Size > 10*1024*1024 && offset == 0 && task.Password == "" {
+			useParallel = true
+		}
+		// Use optimized encryption for password-protected files
+		if task.Password != "" {
+			useOptimizedEncryption = true
+		}
+	}
+
+	// Open destination file with AsyncWriter for better performance
+	var dstWriter io.WriteCloser
+	var err error
+	if offset > 0 {
+		// Resume: use AsyncWriter in append mode
+		dstWriter, err = core.OpenAsyncWriter(task.DestPath, 4*1024*1024, true)
+	} else {
+		// New download: create AsyncWriter
+		dstWriter, err = core.NewAsyncWriter(task.DestPath, 4*1024*1024)
+	}
+
+	if err != nil {
+		task.mu.Lock()
+		task.Status = "error"
+		task.Error = err.Error()
+		task.UpdatedAt = time.Now()
+		task.mu.Unlock()
+		return
+	}
+	defer dstWriter.Close()
+
+	// Create progress tracking writer
+	progressWriter := &progressWriter{
+		dst:  dstWriter,
+		task: task,
+		ctx:  ctx,
+	}
+
+	// Try parallel download for large files
+	if useParallel {
+		log.Printf("Using parallel download for task %s (CID: %s)", task.ID, task.CID)
+		if err := s.ParallelDownloader.DownloadFile(ctx, task.CID, progressWriter); err != nil {
+			log.Printf("Parallel download failed, falling back to sequential: %v", err)
+			// Fallback to sequential download
+			useParallel = false
+		} else {
+			// Success
+			task.mu.Lock()
+			task.Status = "completed"
+			task.Speed = 0
+			task.UpdatedAt = time.Now()
+			task.mu.Unlock()
+			return
+		}
+	}
+
+	// Try optimized direct decryption for encrypted files
+	if useOptimizedEncryption && offset == 0 {
+		log.Printf("Using optimized encryption for task %s (CID: %s)", task.ID, task.CID)
+
+		// Get encrypted stream directly from IPFS
+		reader, err := s.Node.GetFile(ctx, task.CID)
+		if err != nil {
+			log.Printf("Failed to get encrypted stream: %v, falling back to HTTP", err)
+			goto HttpFallback
+		}
+
+		// Create optimized decryption stream
+		decryptedReader, err := crypto.DecryptStream(reader, task.Password)
+		if err != nil {
+			log.Printf("Failed to create decryption stream: %v, falling back to HTTP", err)
+			goto HttpFallback
+		}
+
+		// Stream decrypted data to disk with progress tracking
+		buf := make([]byte, 1024*1024) // 1MB buffer
+		lastSpeedAt := time.Now()
+		lastSpeedLoaded := task.Loaded
+
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+
+			n, rerr := decryptedReader.Read(buf)
+			if n > 0 {
+				if _, werr := progressWriter.Write(buf[:n]); werr != nil {
+					task.mu.Lock()
+					task.Status = "error"
+					task.Error = werr.Error()
+					task.UpdatedAt = time.Now()
+					task.mu.Unlock()
+					return
+				}
+
+				task.mu.Lock()
+				now := time.Now()
+				if now.Sub(lastSpeedAt) >= 500*time.Millisecond {
+					dt := now.Sub(lastSpeedAt).Seconds()
+					dl := task.Loaded - lastSpeedLoaded
+					instant := float64(dl) / dt
+					if task.Speed == 0 {
+						task.Speed = instant
+					} else {
+						task.Speed = task.Speed*0.7 + instant*0.3
+					}
+					lastSpeedAt = now
+					lastSpeedLoaded = task.Loaded
+				}
+				task.UpdatedAt = now
+				task.mu.Unlock()
+			}
+
+			if rerr == io.EOF {
+				task.mu.Lock()
+				task.Status = "completed"
+				task.Speed = 0
+				task.UpdatedAt = time.Now()
+				task.mu.Unlock()
+				return
+			}
+			if rerr != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				task.mu.Lock()
+				task.Status = "error"
+				task.Error = rerr.Error()
+				task.UpdatedAt = time.Now()
+				task.mu.Unlock()
+				return
+			}
+		}
+	}
+
+HttpFallback:
+	// Sequential download via HTTP (maintains compatibility with encryption/password)
 	reqURL := fmt.Sprintf("%s/api/preview/%s?download=true", localBaseURL(), task.CID)
 	if task.Password != "" {
 		reqURL += "&password=" + urlQueryEscape(task.Password)
@@ -289,6 +450,7 @@ func (s *Server) runDownloadTask(ctx context.Context, task *DownloadTask) {
 		task.mu.Unlock()
 		return
 	}
+
 	if offset > 0 {
 		req.Header.Set("Range", fmt.Sprintf("bytes=%d-", offset))
 	}
@@ -323,40 +485,41 @@ func (s *Server) runDownloadTask(ctx context.Context, task *DownloadTask) {
 		task.Loaded = 0
 		task.UpdatedAt = time.Now()
 		task.mu.Unlock()
-		_ = os.Truncate(task.DestPath, 0)
+
+		// For AsyncWriter, we need to seek and truncate
+		if asyncWriter, ok := dstWriter.(io.Seeker); ok {
+			asyncWriter.Seek(0, io.SeekStart)
+			if f, ok := asyncWriter.(*core.AsyncWriter); ok {
+				// Close and recreate to truncate
+				f.Close()
+				dstWriter, err = core.NewAsyncWriter(task.DestPath, 4*1024*1024)
+				if err != nil {
+					task.mu.Lock()
+					task.Status = "error"
+					task.Error = err.Error()
+					task.UpdatedAt = time.Now()
+					task.mu.Unlock()
+					return
+				}
+				defer dstWriter.Close()
+				progressWriter.dst = dstWriter
+			}
+		}
 	}
 
-	dst, err := os.OpenFile(task.DestPath, os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		task.mu.Lock()
-		task.Status = "error"
-		task.Error = err.Error()
-		task.UpdatedAt = time.Now()
-		task.mu.Unlock()
-		return
-	}
-	defer dst.Close()
-
-	if _, err := dst.Seek(offset, io.SeekStart); err != nil {
-		task.mu.Lock()
-		task.Status = "error"
-		task.Error = err.Error()
-		task.UpdatedAt = time.Now()
-		task.mu.Unlock()
-		return
-	}
-
-	buf := make([]byte, 256*1024)
+	// Use larger buffer for better performance
+	buf := make([]byte, 1024*1024) // 1MB buffer
 	lastSpeedAt := time.Now()
-	lastSpeedLoaded := offset
+	lastSpeedLoaded := task.Loaded
 
 	for {
 		if ctx.Err() != nil {
 			return
 		}
+
 		n, rerr := resp.Body.Read(buf)
 		if n > 0 {
-			if _, werr := dst.Write(buf[:n]); werr != nil {
+			if _, werr := dstWriter.Write(buf[:n]); werr != nil {
 				task.mu.Lock()
 				task.Status = "error"
 				task.Error = werr.Error()
@@ -383,6 +546,7 @@ func (s *Server) runDownloadTask(ctx context.Context, task *DownloadTask) {
 			task.UpdatedAt = now
 			task.mu.Unlock()
 		}
+
 		if rerr == io.EOF {
 			break
 		}
@@ -404,6 +568,50 @@ func (s *Server) runDownloadTask(ctx context.Context, task *DownloadTask) {
 	task.Speed = 0
 	task.UpdatedAt = time.Now()
 	task.mu.Unlock()
+}
+
+// progressWriter wraps a writer to track download progress
+type progressWriter struct {
+	dst  io.Writer
+	task *DownloadTask
+	ctx  context.Context
+
+	lastUpdate time.Time
+	lastLoaded int64
+}
+
+func (pw *progressWriter) Write(p []byte) (n int, err error) {
+	// Check context cancellation
+	select {
+	case <-pw.ctx.Done():
+		return 0, pw.ctx.Err()
+	default:
+	}
+
+	n, err = pw.dst.Write(p)
+	if n > 0 {
+		pw.task.mu.Lock()
+		pw.task.Loaded += int64(n)
+		now := time.Now()
+
+		// Update speed every 500ms
+		if now.Sub(pw.lastUpdate) >= 500*time.Millisecond {
+			dt := now.Sub(pw.lastUpdate).Seconds()
+			dl := pw.task.Loaded - pw.lastLoaded
+			instant := float64(dl) / dt
+			if pw.task.Speed == 0 {
+				pw.task.Speed = instant
+			} else {
+				pw.task.Speed = pw.task.Speed*0.7 + instant*0.3
+			}
+			pw.lastUpdate = now
+			pw.lastLoaded = pw.task.Loaded
+		}
+
+		pw.task.UpdatedAt = now
+		pw.task.mu.Unlock()
+	}
+	return n, err
 }
 
 func urlQueryEscape(s string) string {
