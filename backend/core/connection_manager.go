@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 
@@ -117,9 +118,9 @@ func (cm *ConnectionManager) restore() error {
 		key   string
 		value string
 	}{
-		{"Swarm.ConnMgr.HighWater", "600"},
-		{"Swarm.ConnMgr.LowWater", "100"},
-		{"Swarm.ConnMgr.GracePeriod", "\"20s\""},
+		{"Swarm.ConnMgr.HighWater", "1000"},
+		{"Swarm.ConnMgr.LowWater", "400"},
+		{"Swarm.ConnMgr.GracePeriod", "\"60s\""},
 	}
 
 	for _, cfg := range configs {
@@ -151,12 +152,19 @@ func (cm *ConnectionManager) saveOriginalConfig() error {
 	}
 
 	for _, key := range configs {
-		cmd := exec.Command(cm.ipfsMgr.BinPath, "config", key)
+		// Use --json to get JSON-formatted value for consistency with updateIPFSConfigJSON
+		cmd := exec.Command(cm.ipfsMgr.BinPath, "config", "--json", key)
 		cmd.Env = append(cmd.Env, "IPFS_PATH="+cm.ipfsMgr.DataDir)
 
 		output, err := cmd.Output()
 		if err == nil {
-			cm.originalConfig[key] = string(output)
+			value := strings.TrimSpace(string(output))
+			// GracePeriod is a string but ipfs config --json returns it without quotes
+			// We need to wrap it in quotes for JSON format when writing back
+			if key == "Swarm.ConnMgr.GracePeriod" && !strings.HasPrefix(value, "\"") {
+				value = "\"" + value + "\""
+			}
+			cm.originalConfig[key] = value
 		}
 	}
 
@@ -169,9 +177,11 @@ func (cm *ConnectionManager) applyBoostConfig() error {
 		key   string
 		value string
 	}{
-		{"Swarm.ConnMgr.HighWater", "2000"},
-		{"Swarm.ConnMgr.LowWater", "1500"},
-		{"Swarm.ConnMgr.GracePeriod", "\"120s\""},
+		// Moderate boost: only 50% increase from defaults
+		// This provides extra headroom without dramatic changes
+		{"Swarm.ConnMgr.HighWater", "1500"},
+		{"Swarm.ConnMgr.LowWater", "600"},
+		{"Swarm.ConnMgr.GracePeriod", "\"90s\""},
 	}
 
 	for _, cfg := range configs {

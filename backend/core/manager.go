@@ -128,10 +128,13 @@ func (m *IpfsManager) ConfigRepo() error {
 		{"Experimental.AcceleratedDHTClient", "true"}, // Fast DHT
 
 		// Optimization: Connection Manager
-		// Lower watermark for client usage to save resources
-		// Update: Increased watermarks to maintain better connectivity for p2p transfers
-		{"Swarm.ConnMgr.LowWater", "100"},
-		{"Swarm.ConnMgr.HighWater", "600"},
+		// Higher defaults for stable p2p connections (both downloading and sharing)
+		// LowWater: minimum connections to maintain
+		// HighWater: trigger cleanup when exceeded
+		// GracePeriod: new connections immune to cleanup for this duration
+		{"Swarm.ConnMgr.LowWater", "400"},
+		{"Swarm.ConnMgr.HighWater", "1000"},
+		{"Swarm.ConnMgr.GracePeriod", `"60s"`},
 
 		// Optimization: Relay Client & Transports
 		{"Swarm.RelayClient.Enabled", "true"},

@@ -24,13 +24,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	
+
 	// Check for .pointer file in default location
 	defaultBase := filepath.Join(home, ".mochibox")
 	pointerPath := filepath.Join(defaultBase, ".pointer")
-	
+
 	dataDir := defaultBase
-	
+
 	if content, err := os.ReadFile(pointerPath); err == nil {
 		customPath := strings.TrimSpace(string(content))
 		if customPath != "" {
@@ -50,7 +50,7 @@ func main() {
 	} else {
 		log.Printf("Failed to open log file: %v", err)
 	}
-	
+
 	log.Println("----------------------------------------")
 	log.Println("MochiBox Backend Starting...")
 	log.Printf("Data Directory: %s", dataDir)
@@ -66,7 +66,7 @@ func main() {
 
 	// Account Manager
 	accountMgr := core.NewAccountManager(database, dataDir)
-	
+
 	// Try Auto-Unlock
 	if lockData, err := crypto.LoadAuthLock(dataDir); err == nil {
 		log.Println("Found auto-unlock data, attempting login...")
@@ -118,11 +118,11 @@ func main() {
 					// We only update if it's different from current connected one?
 					// Or just if it's different from DB settings?
 					// Note: node.UpdateApiUrl will verify connection.
-					
+
 					// If settings is empty or different
 					if currentSettings.IpfsApiUrl != ipfsMgr.ApiAddr {
 						log.Printf("Managed Node ready at %s. Updating client...", ipfsMgr.ApiAddr)
-						
+
 						if err := node.UpdateApiUrl(ipfsMgr.ApiAddr); err == nil {
 							// Update DB
 							currentSettings.IpfsApiUrl = ipfsMgr.ApiAddr
@@ -171,17 +171,22 @@ func main() {
 			server.ShutdownChan <- true
 		}
 	}()
-	
+
 	// Handle graceful shutdown
 	go func() {
 		c := make(chan os.Signal, 1)
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
-		
+
 		select {
 		case <-c:
 			log.Println("Received signal, shutting down...")
 		case <-server.ShutdownChan:
 			log.Println("Received shutdown request (API/Stdin)...")
+		}
+
+		// Stop health monitor
+		if server.HealthMonitor != nil {
+			server.HealthMonitor.Stop()
 		}
 
 		if ipfsMgr != nil {

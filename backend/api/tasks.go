@@ -592,12 +592,23 @@ func (s *Server) runDownloadTask(ctx context.Context, task *DownloadTask) {
 		}
 
 		log.Printf("Task %s: Download failed: %v", task.ID, downloadErr)
+
+		// Notify health monitor of failure for potential repair
+		if s.HealthMonitor != nil {
+			s.HealthMonitor.OnDownloadTimeout(task.CID)
+		}
+
 		task.mu.Lock()
 		task.Status = "error"
 		task.Error = downloadErr.Error()
 		task.UpdatedAt = time.Now()
 		task.mu.Unlock()
 		return
+	}
+
+	// Success - notify health monitor
+	if s.HealthMonitor != nil {
+		s.HealthMonitor.OnDownloadSuccess(task.CID)
 	}
 
 	// Success

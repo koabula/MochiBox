@@ -27,6 +27,7 @@ type Server struct {
 	DownloadBooster    *core.DownloadBooster
 	ParallelDownloader *core.ParallelDownloader
 	ConnectionManager  *core.ConnectionManager
+	HealthMonitor      *core.HealthMonitor
 }
 
 func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManager, accMgr *core.AccountManager) *Server {
@@ -50,6 +51,7 @@ func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManage
 	booster := core.NewDownloadBooster(node)
 	connMgr := core.NewConnectionManager(ipfsMgr)
 	parallelDL := core.NewParallelDownloader(node, booster)
+	healthMon := core.NewHealthMonitor(node, ipfsMgr, booster)
 
 	s := &Server{
 		Node:               node,
@@ -62,7 +64,12 @@ func NewServer(node *core.MochiNode, database *gorm.DB, ipfsMgr *core.IpfsManage
 		DownloadBooster:    booster,
 		ParallelDownloader: parallelDL,
 		ConnectionManager:  connMgr,
+		HealthMonitor:      healthMon,
 	}
+
+	// Start health monitor for periodic maintenance
+	healthMon.Start()
+
 	s.RegisterRoutes()
 	return s
 }

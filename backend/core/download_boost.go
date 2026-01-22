@@ -148,8 +148,10 @@ ConnectPhase:
 		return fmt.Errorf("no providers found for CID")
 	}
 
-	// Prefetch first block in background
-	go db.prefetchFirstBlock(context.Background(), cid)
+	// Start prefetch and wait with short timeout (500ms)
+	// If prefetch takes longer, it continues in background while download starts
+	prefetchDone := db.PrefetchFirstBlock(context.Background(), cid)
+	db.WaitForPrefetch(prefetchDone, 500*time.Millisecond)
 
 	log.Printf("Warmup complete for CID %s: %d providers discovered", cid, len(providers))
 	return nil
@@ -191,33 +193,56 @@ func (db *DownloadBooster) connectProvider(ctx context.Context, info peer.AddrIn
 	return true
 }
 
-// prefetchFirstBlock actively fetches the first block to trigger Bitswap session
-func (db *DownloadBooster) prefetchFirstBlock(ctx context.Context, cid string) {
-	prefetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+// PrefetchFirstBlock actively fetches the first block to trigger Bitswap session.
+// It waits up to shortTimeout for quick completion, then continues async if needed.
+// Returns a channel that closes when prefetch completes (success or failure).
+func (db *DownloadBooster) PrefetchFirstBlock(ctx context.Context, cid string) <-chan struct{} {
+	done := make(chan struct{})
 
-	log.Printf("Prefetching first block for CID %s to establish Bitswap session", cid)
+	go func() {
+		defer close(done)
 
-	cidPath, err := path.NewPath("/ipfs/" + cid)
-	if err != nil {
-		log.Printf("Failed to create path for prefetch: %v", err)
-		return
-	}
+		prefetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
 
-	node, err := db.node.IPFS.Unixfs().Get(prefetchCtx, cidPath)
-	if err != nil {
-		log.Printf("Prefetch failed (acceptable, will retry on actual download): %v", err)
-		return
-	}
+		log.Printf("Prefetching first block for CID %s to establish Bitswap session", cid)
 
-	if f, ok := node.(files.File); ok {
-		buf := make([]byte, 256*1024)
-		n, _ := f.Read(buf)
-		f.Close()
-		log.Printf("Successfully prefetched %d bytes for %s, Bitswap session established", n, cid)
-	} else if d, ok := node.(files.Directory); ok {
-		d.Close()
-		log.Printf("Prefetch discovered directory structure for %s", cid)
+		cidPath, err := path.NewPath("/ipfs/" + cid)
+		if err != nil {
+			log.Printf("Failed to create path for prefetch: %v", err)
+			return
+		}
+
+		node, err := db.node.IPFS.Unixfs().Get(prefetchCtx, cidPath)
+		if err != nil {
+			log.Printf("Prefetch failed (acceptable, will retry on actual download): %v", err)
+			return
+		}
+
+		if f, ok := node.(files.File); ok {
+			buf := make([]byte, 256*1024)
+			n, _ := f.Read(buf)
+			f.Close()
+			log.Printf("Successfully prefetched %d bytes for %s, Bitswap session established", n, cid)
+		} else if d, ok := node.(files.Directory); ok {
+			d.Close()
+			log.Printf("Prefetch discovered directory structure for %s", cid)
+		}
+	}()
+
+	return done
+}
+
+// WaitForPrefetch waits for prefetch with a short timeout.
+// If prefetch doesn't complete within shortTimeout, it returns immediately
+// and the prefetch continues in the background.
+func (db *DownloadBooster) WaitForPrefetch(prefetchDone <-chan struct{}, shortTimeout time.Duration) bool {
+	select {
+	case <-prefetchDone:
+		return true // Prefetch completed within timeout
+	case <-time.After(shortTimeout):
+		log.Printf("Prefetch not completed within %v, continuing with download", shortTimeout)
+		return false // Timeout, prefetch continues in background
 	}
 }
 
@@ -254,8 +279,14 @@ func (db *DownloadBooster) GetConnectionQuality(peerID string) int64 {
 	return -1
 }
 
-// ClearCache clears the provider cache
+// ClearCache clears the entire provider cache
 func (db *DownloadBooster) ClearCache() {
 	db.providerCache = sync.Map{}
 	log.Println("Provider cache cleared")
+}
+
+// ClearCacheForCID removes cached providers for a specific CID
+func (db *DownloadBooster) ClearCacheForCID(cid string) {
+	db.providerCache.Delete(cid)
+	log.Printf("Provider cache cleared for CID: %s", cid)
 }

@@ -165,6 +165,12 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 		}
 	}
 
+	// If at least one connection succeeded and CID provided, clear negative cache
+	// This is important because direct connect may succeed after provider discovery timed out
+	if connected > 0 && req.CID != "" {
+		s.DownloadBooster.ClearCacheForCID(req.CID)
+	}
+
 	response := gin.H{
 		"status":    "done",
 		"attempted": len(peers),
