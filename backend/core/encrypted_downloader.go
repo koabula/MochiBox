@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"sync"
 
 	"mochibox-core/crypto"
 )
@@ -20,10 +19,10 @@ func NewEncryptedDownloader(pd *ParallelDownloader) *EncryptedDownloader {
 	}
 }
 
-// DownloadAndDecrypt downloads an encrypted file in parallel and decrypts it in order
-// The download phase is parallel (chunks can arrive out of order)
-// The decryption phase is sequential (waits for chunks in order)
-func (ed *EncryptedDownloader) DownloadAndDecrypt(ctx context.Context, cid string, password string, dst io.Writer) error {
+// DownloadAndDecrypt downloads an encrypted file and decrypts it with the provided key
+// The key should already be derived (from password+salt or decrypted session key)
+// File format: [16B IV][AES-CTR encrypted data]
+func (ed *EncryptedDownloader) DownloadAndDecrypt(ctx context.Context, cid string, key []byte, dst io.Writer, progressCallback func(downloaded int64)) error {
 	if ed.parallelDownloader == nil {
 		return fmt.Errorf("parallel downloader not initialized")
 	}
@@ -34,10 +33,10 @@ func (ed *EncryptedDownloader) DownloadAndDecrypt(ctx context.Context, cid strin
 	// Channel to coordinate download completion
 	downloadDone := make(chan error, 1)
 
-	// Start parallel download to pipe writer
+	// Start download to pipe writer
 	go func() {
 		defer pw.Close()
-		err := ed.parallelDownloader.DownloadFile(ctx, cid, pw)
+		err := ed.parallelDownloader.DownloadFile(ctx, cid, pw, progressCallback, nil)
 		if err != nil {
 			pw.CloseWithError(err)
 			downloadDone <- err
@@ -47,7 +46,8 @@ func (ed *EncryptedDownloader) DownloadAndDecrypt(ctx context.Context, cid strin
 	}()
 
 	// Stream decrypt from pipe reader to destination
-	decryptReader, err := crypto.DecryptStream(pr, password)
+	// File format is [16B IV][encrypted data], matching NewAESCTRDecrypter expectations
+	decryptReader, err := crypto.NewAESCTRDecrypter(pr, key)
 	if err != nil {
 		return fmt.Errorf("failed to create decrypt stream: %w", err)
 	}
@@ -67,57 +67,5 @@ func (ed *EncryptedDownloader) DownloadAndDecrypt(ctx context.Context, cid strin
 	}
 
 	log.Printf("Successfully downloaded and decrypted file %s", cid)
-	return nil
-}
-
-// DownloadAndDecryptChunked downloads encrypted file with better chunk ordering control
-// This version maintains a buffer to handle out-of-order chunks better
-func (ed *EncryptedDownloader) DownloadAndDecryptChunked(ctx context.Context, cid string, password string, dst io.Writer) error {
-	// Create a buffered pipe with larger buffer for smoother streaming
-	pr, pw := io.Pipe()
-
-	var downloadErr error
-	var wg sync.WaitGroup
-	wg.Add(2)
-
-	// Goroutine 1: Parallel download
-	go func() {
-		defer wg.Done()
-		defer pw.Close()
-
-		err := ed.parallelDownloader.DownloadFile(ctx, cid, pw)
-		if err != nil {
-			log.Printf("Parallel download error: %v", err)
-			pw.CloseWithError(err)
-			downloadErr = err
-		}
-	}()
-
-	// Goroutine 2: Stream decryption
-	var decryptErr error
-	go func() {
-		defer wg.Done()
-
-		decryptReader, err := crypto.DecryptStream(pr, password)
-		if err != nil {
-			decryptErr = fmt.Errorf("failed to create decrypt stream: %w", err)
-			return
-		}
-
-		_, err = io.Copy(dst, decryptReader)
-		if err != nil && err != io.EOF {
-			decryptErr = fmt.Errorf("decryption copy failed: %w", err)
-		}
-	}()
-
-	wg.Wait()
-
-	if downloadErr != nil {
-		return fmt.Errorf("download failed: %w", downloadErr)
-	}
-	if decryptErr != nil {
-		return decryptErr
-	}
-
 	return nil
 }

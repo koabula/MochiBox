@@ -64,11 +64,21 @@ const completedTasks = computed(() => tasks.value.filter(t => ['completed', 'err
                     <div>
                         <p class="font-bold text-nord-1 dark:text-nord-6 truncate max-w-xs">{{ task.name }}</p>
                         <div class="text-xs text-nord-3 dark:text-nord-4 flex items-center gap-2">
-                            <span v-if="task.status === 'pending'">Waiting...</span>
-                            <span v-else>{{ formatSize(task.loaded) }} / {{ formatSize(task.total) }}</span>
-                            <span v-if="task.type === 'download' && task.status === 'running'" class="text-nord-10 font-mono">
-                                {{ formatSpeed(task.speed) }}
-                            </span>
+                            <template v-if="task.status === 'pending'">
+                                <span>Waiting...</span>
+                            </template>
+                            <template v-else-if="task.phase === 'preparing'">
+                                <span class="text-nord-10">Preparing...</span>
+                            </template>
+                            <template v-else-if="task.phase === 'connecting'">
+                                <span class="text-nord-10">Connecting to peers...</span>
+                            </template>
+                            <template v-else-if="task.phase === 'downloading' || !task.phase">
+                                <span>{{ formatSize(task.loaded) }} / {{ formatSize(task.total) }}</span>
+                                <span v-if="task.type === 'download' && task.status === 'running' && task.speed > 0" class="text-nord-10 font-mono">
+                                    {{ formatSpeed(task.speed) }}
+                                </span>
+                            </template>
                             <span v-if="task.type === 'download' && task.status === 'paused'" class="text-orange-500 font-bold">
                                 Paused
                             </span>

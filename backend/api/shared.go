@@ -24,6 +24,7 @@ func (s *Server) registerSharedRoutes(api *gin.RouterGroup) {
 		shared.POST("/pin", s.handlePinShared)
 		shared.GET("/search/:cid", s.handleSearchShared)
 		shared.POST("/connect", s.handleSharedConnect)
+		shared.POST("/verify", s.handleVerifyCID)
 	}
 }
 
@@ -68,9 +69,39 @@ func (s *Server) handleSearchShared(c *gin.Context) {
 	c.SSEvent("done", gin.H{"total": count})
 }
 
+// handleVerifyCID verifies if a CID is available (can be fetched)
+func (s *Server) handleVerifyCID(c *gin.Context) {
+	var req struct {
+		CID string `json:"cid" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 8*time.Second)
+	defer cancel()
+
+	// Try to stat the file - this verifies CID availability via Bitswap
+	size, err := s.Node.GetFileSize(ctx, req.CID)
+	if err != nil {
+		c.JSON(http.StatusOK, gin.H{
+			"available": false,
+			"error":     err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"available": true,
+		"size":      size,
+	})
+}
+
 func (s *Server) handleSharedConnect(c *gin.Context) {
 	var req struct {
 		Peers []string `json:"peers"`
+		CID   string   `json:"cid"` // Optional: CID to verify after connect
 	}
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -111,25 +142,14 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 				return
 			}
 			// Success: Try to add to Peering (Protection)
-			// We fire and forget this protection attempt
 			go func(a string) {
-				// Use a longer timeout for peering add if needed
 				pCtx, pCancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer pCancel()
 
-				// 1. Add to Peering (High Priority Protection)
 				if err := s.IpfsManager.AddPeering(pCtx, a); err != nil {
 					fmt.Printf("Warning: Failed to add peer to peering list: %v\n", err)
-					// Fallback: Try Connect/PeeringAdd via Node if CLI fails
 					s.Node.PeeringAdd(pCtx, a)
 				}
-
-				// 2. Warmup: Send a want for the root block to trigger bitswap session establishment
-				// We don't need to wait for the result, just sending the want is enough.
-				// However, since we don't have the CID here in the connect request easily accessible (it's generic connect),
-				// we skip specific CID warmup.
-				// The user will click Preview/Download which triggers the fetch.
-				// With Peering, the connection should stay alive and robust.
 			}(addr)
 
 			results[i] = connectResult{Addr: addr, OK: true}
@@ -145,12 +165,32 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 		}
 	}
 
-	c.JSON(http.StatusOK, gin.H{
+	response := gin.H{
 		"status":    "done",
 		"attempted": len(peers),
 		"connected": connected,
 		"results":   results,
-	})
+	}
+
+	// If CID provided and at least one connection succeeded, verify CID availability
+	if req.CID != "" && connected > 0 {
+		verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer verifyCancel()
+
+		// Start warmup for the CID
+		go s.DownloadBooster.WarmupCID(context.Background(), req.CID)
+
+		// Quick stat to check availability
+		size, err := s.Node.GetFileSize(verifyCtx, req.CID)
+		if err == nil {
+			response["cid_available"] = true
+			response["cid_size"] = size
+		} else {
+			response["cid_available"] = false
+		}
+	}
+
+	c.JSON(http.StatusOK, response)
 }
 
 func (s *Server) handlePinShared(c *gin.Context) {

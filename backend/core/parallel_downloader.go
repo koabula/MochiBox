@@ -5,229 +5,75 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"sync"
-
-	"github.com/ipfs/boxo/ipld/merkledag"
-	"github.com/ipfs/boxo/path"
+	"time"
 )
 
-type ChunkTask struct {
-	CID   string
-	Index int
-	Size  uint64
-}
-
-type ChunkResult struct {
-	Index int
-	Data  []byte
-	Error error
-}
-
 type ParallelDownloader struct {
-	node           *MochiNode
-	booster        *DownloadBooster
-	maxConcurrency int
+	node    *MochiNode
+	booster *DownloadBooster
 }
 
 func NewParallelDownloader(node *MochiNode, booster *DownloadBooster) *ParallelDownloader {
 	return &ParallelDownloader{
-		node:           node,
-		booster:        booster,
-		maxConcurrency: 8,
+		node:    node,
+		booster: booster,
 	}
 }
 
-// DownloadFile downloads a file with parallel chunk fetching
-// This method works for both encrypted and non-encrypted files
-func (pd *ParallelDownloader) DownloadFile(ctx context.Context, cid string, dst io.Writer) error {
+// DownloadFile downloads a file using IPFS streaming
+// IPFS Bitswap internally handles parallel block fetching, so we use streaming for correctness
+// progressCallback receives incremental byte counts when data is fetched
+// totalSizeCallback is called once when total file size is determined (can be nil)
+func (pd *ParallelDownloader) DownloadFile(ctx context.Context, cid string, dst io.Writer, progressCallback func(delta int64), totalSizeCallback func(total int64)) error {
 	if pd.node == nil {
 		return fmt.Errorf("node not initialized")
 	}
 
-	// Always try parallel download first, even for single-block files
-	// If DAG structure is not available, will fallback automatically
-	links, totalSize, err := pd.getFileLinks(ctx, cid)
-	if err != nil || len(links) == 0 {
-		// Single block or error, use direct download
-		log.Printf("Direct download for CID %s (single block or no DAG structure)", cid)
-		return pd.fallbackDownload(ctx, cid, dst)
+	// Get file size first if callback provided
+	if totalSizeCallback != nil {
+		sizeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if size, err := pd.node.GetFileSize(sizeCtx, cid); err == nil && size > 0 {
+			totalSizeCallback(size)
+		}
 	}
 
-	// Parallel download for multi-chunk files
-	log.Printf("Parallel download for CID %s: %d chunks, total %d bytes", cid, len(links), totalSize)
-	return pd.parallelDownload(ctx, links, dst)
+	log.Printf("Streaming download for CID %s", cid)
+	return pd.streamDownload(ctx, cid, dst, progressCallback)
 }
 
-// getFileLinks extracts the DAG links (chunks) from a UnixFS file
-func (pd *ParallelDownloader) getFileLinks(ctx context.Context, cidStr string) ([]ChunkTask, uint64, error) {
-	cidPath, err := path.NewPath("/ipfs/" + cidStr)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	// Get the DAG node
-	dagAPI := pd.node.IPFS.Dag()
-
-	// Resolve the path to get root node
-	resolved, _, err := pd.node.IPFS.ResolvePath(ctx, cidPath)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	rootCid := resolved.RootCid()
-
-	// Get the node from DAG service
-	node, err := dagAPI.Get(ctx, rootCid)
-	if err != nil {
-		return nil, 0, err
-	}
-
-	var links []ChunkTask
-	var totalSize uint64
-
-	// Try to decode as ProtoNode (most common for UnixFS files)
-	protoNode, ok := node.(*merkledag.ProtoNode)
-	if !ok {
-		// Not a ProtoNode, probably a single-block file
-		return nil, 0, fmt.Errorf("not a multi-block file")
-	}
-
-	nodeLinks := protoNode.Links()
-	if len(nodeLinks) == 0 {
-		return nil, 0, fmt.Errorf("no links found in DAG node")
-	}
-
-	for i, link := range nodeLinks {
-		links = append(links, ChunkTask{
-			CID:   link.Cid.String(),
-			Index: i,
-			Size:  link.Size,
-		})
-		totalSize += link.Size
-	}
-
-	return links, totalSize, nil
-}
-
-// parallelDownload fetches chunks in parallel and writes them sequentially
-func (pd *ParallelDownloader) parallelDownload(ctx context.Context, tasks []ChunkTask, dst io.Writer) error {
-	chunks := make(chan ChunkTask, len(tasks))
-	results := make(chan ChunkResult, len(tasks))
-
-	// Start worker pool
-	var wg sync.WaitGroup
-	for i := 0; i < pd.maxConcurrency; i++ {
-		wg.Add(1)
-		go pd.chunkWorker(ctx, chunks, results, &wg)
-	}
-
-	// Distribute tasks
-	for _, task := range tasks {
-		chunks <- task
-	}
-	close(chunks)
-
-	// Wait for all workers to finish
-	go func() {
-		wg.Wait()
-		close(results)
-	}()
-
-	// Collect and merge results
-	return pd.mergeChunks(results, len(tasks), dst)
-}
-
-// chunkWorker fetches individual chunks
-func (pd *ParallelDownloader) chunkWorker(ctx context.Context, tasks <-chan ChunkTask, results chan<- ChunkResult, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	for task := range tasks {
-		select {
-		case <-ctx.Done():
-			results <- ChunkResult{Index: task.Index, Error: ctx.Err()}
-			return
-		default:
-		}
-
-		// Fetch chunk from IPFS
-		reader, err := pd.node.GetFile(ctx, task.CID)
-		if err != nil {
-			log.Printf("Failed to fetch chunk %d (CID: %s): %v", task.Index, task.CID, err)
-			results <- ChunkResult{Index: task.Index, Error: err}
-			continue
-		}
-
-		// Read chunk data (chunks are typically 256KB-1MB, acceptable in memory)
-		data, err := io.ReadAll(reader)
-		if err != nil {
-			log.Printf("Failed to read chunk %d: %v", task.Index, err)
-			results <- ChunkResult{Index: task.Index, Error: err}
-			continue
-		}
-
-		results <- ChunkResult{
-			Index: task.Index,
-			Data:  data,
-		}
-	}
-}
-
-// mergeChunks assembles chunks in order and writes to destination
-func (pd *ParallelDownloader) mergeChunks(results <-chan ChunkResult, totalChunks int, dst io.Writer) error {
-	chunkMap := make(map[int][]byte)
-	var lastError error
-
-	// Collect all results
-	for result := range results {
-		if result.Error != nil {
-			lastError = result.Error
-			continue
-		}
-		chunkMap[result.Index] = result.Data
-	}
-
-	// Check if we got all chunks
-	if len(chunkMap) < totalChunks {
-		if lastError != nil {
-			return fmt.Errorf("incomplete download: got %d/%d chunks, last error: %w", len(chunkMap), totalChunks, lastError)
-		}
-		return fmt.Errorf("incomplete download: got %d/%d chunks", len(chunkMap), totalChunks)
-	}
-
-	// Write chunks in order
-	for i := 0; i < totalChunks; i++ {
-		data, ok := chunkMap[i]
-		if !ok {
-			return fmt.Errorf("missing chunk %d", i)
-		}
-
-		if _, err := dst.Write(data); err != nil {
-			return fmt.Errorf("failed to write chunk %d: %w", i, err)
-		}
-	}
-
-	log.Printf("Successfully merged %d chunks", totalChunks)
-	return nil
-}
-
-// fallbackDownload uses sequential download from IPFS
-func (pd *ParallelDownloader) fallbackDownload(ctx context.Context, cid string, dst io.Writer) error {
+// streamDownload uses IPFS streaming with progress tracking
+func (pd *ParallelDownloader) streamDownload(ctx context.Context, cid string, dst io.Writer, progressCallback func(delta int64)) error {
 	reader, err := pd.node.GetFile(ctx, cid)
 	if err != nil {
 		return fmt.Errorf("failed to get file: %w", err)
 	}
 
-	_, err = io.Copy(dst, reader)
-	if err != nil {
-		return fmt.Errorf("failed to copy file: %w", err)
+	buf := make([]byte, 256*1024) // 256KB buffer for efficient transfer
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		n, readErr := reader.Read(buf)
+		if n > 0 {
+			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
+				return fmt.Errorf("failed to write: %w", writeErr)
+			}
+			if progressCallback != nil {
+				progressCallback(int64(n))
+			}
+		}
+		if readErr != nil {
+			if readErr == io.EOF {
+				break
+			}
+			return fmt.Errorf("failed to read: %w", readErr)
+		}
 	}
 
+	log.Printf("Streaming download completed for CID %s", cid)
 	return nil
-}
-
-// SetMaxConcurrency sets the maximum number of parallel chunk downloads
-func (pd *ParallelDownloader) SetMaxConcurrency(n int) {
-	if n > 0 && n <= 32 {
-		pd.maxConcurrency = n
-	}
 }

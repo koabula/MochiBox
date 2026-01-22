@@ -41,6 +41,8 @@ const peersCount = ref(0);
 let searchEventSource: EventSource | null = null;
 const connectStatus = ref<'idle' | 'connecting' | 'done'>('idle');
 const connectResult = ref<any>(null);
+const cidVerified = ref(false);
+const cidSize = ref(0);
 
 onMounted(() => {
     sharedStore.fetchHistory();
@@ -82,6 +84,8 @@ const handleImportShared = async () => {
         peersCount.value = 0;
         connectStatus.value = 'idle';
         connectResult.value = null;
+        cidVerified.value = false;
+        cidSize.value = 0;
         if (searchEventSource) {
             searchEventSource.close();
             searchEventSource = null;
@@ -172,12 +176,22 @@ const handleImportShared = async () => {
         
         sharedInput.value = '';
 
-        // Start Search & Connect
+        // Start Search & Connect in parallel
+        // Connect with CID to verify availability after connection
         if (peers.length > 0) {
             connectStatus.value = 'connecting';
-            api.post('/shared/connect', { peers })
+            api.post('/shared/connect', { peers, cid })
                 .then((res) => {
                     connectResult.value = res.data;
+                    // Check if CID was verified via direct connection
+                    if (res.data.cid_available) {
+                        cidVerified.value = true;
+                        cidSize.value = res.data.cid_size || 0;
+                        // Update modal data with size if we got it
+                        if (cidSize.value > 0 && sharedModalData.value?.cid === cid) {
+                            sharedModalData.value.size = cidSize.value;
+                        }
+                    }
                 })
                 .catch((e: any) => {
                     connectResult.value = {
@@ -300,7 +314,6 @@ const handlePreview = (file: any, password?: string) => {
 const handleDownload = async (file: any, password?: string) => {
     const filename = file.name || file.cid;
     
-    // Resolve password first
     let pw = password || '';
     if (file.encryption_type === 'password') {
         if (file.embedded_password) {
@@ -316,41 +329,18 @@ const handleDownload = async (file: any, password?: string) => {
          return;
     }
 
-    const taskId = taskStore.addTask('download', filename);
-    toastStore.success(`Download started for ${filename}`);
-
     try {
-        let fileHandle = null;
-        if (settingsStore.askPath) {
-             try {
-                // @ts-ignore
-                if (window.showSaveFilePicker) {
-                    // @ts-ignore
-                    fileHandle = await window.showSaveFilePicker({
-                        suggestedName: filename
-                    });
-                }
-             } catch (err: any) {
-                 if (err.name === 'AbortError') {
-                     taskStore.removeTask(taskId);
-                     return;
-                 }
-             }
-        }
-        
-        const baseUrl = api.defaults.baseURL || 'http://localhost:3666/api';
-        let url = `${baseUrl}/preview/${file.cid}?download=true`;
-        const params = new URLSearchParams();
-        if (pw) params.append('password', pw);
-        if (file.encryption_meta) params.append('meta', file.encryption_meta);
-        if (file.encryption_type) params.append('type', file.encryption_type);
-        if (params.toString()) url += `&${params.toString()}`;
-        
-        taskStore.startDownload(url, filename, fileHandle, taskId);
-
+        await taskStore.startBackendDownload(
+            0,
+            filename,
+            pw,
+            file.encryption_type,
+            file.encryption_meta,
+            file.cid
+        );
+        toastStore.success(`Download started for ${filename}`);
     } catch (e: any) {
         console.error(e);
-        taskStore.failTask(taskId, e.message || 'Download failed');
         toastStore.error(`Download failed: ${e.message}`);
     }
 };
@@ -484,6 +474,8 @@ const onModalPin = () => {
             :peers-count="peersCount"
             :connect-status="connectStatus"
             :connect-result="connectResult"
+            :cid-verified="cidVerified"
+            :cid-size="cidSize"
             @close="showSharedModal = false"
             @preview="onModalPreview"
             @download="onModalDownload"

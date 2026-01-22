@@ -119,7 +119,7 @@ func (cm *ConnectionManager) restore() error {
 	}{
 		{"Swarm.ConnMgr.HighWater", "600"},
 		{"Swarm.ConnMgr.LowWater", "100"},
-		{"Swarm.ConnMgr.GracePeriod", "20s"},
+		{"Swarm.ConnMgr.GracePeriod", "\"20s\""},
 	}
 
 	for _, cfg := range configs {
@@ -128,7 +128,7 @@ func (cm *ConnectionManager) restore() error {
 			cfg.value = original
 		}
 
-		if err := cm.updateIPFSConfig(cfg.key, cfg.value); err != nil {
+		if err := cm.updateIPFSConfigJSON(cfg.key, cfg.value); err != nil {
 			log.Printf("Warning: Failed to restore %s: %v", cfg.key, err)
 		}
 	}
@@ -171,11 +171,11 @@ func (cm *ConnectionManager) applyBoostConfig() error {
 	}{
 		{"Swarm.ConnMgr.HighWater", "2000"},
 		{"Swarm.ConnMgr.LowWater", "1500"},
-		{"Swarm.ConnMgr.GracePeriod", "120s"},
+		{"Swarm.ConnMgr.GracePeriod", "\"120s\""},
 	}
 
 	for _, cfg := range configs {
-		if err := cm.updateIPFSConfig(cfg.key, cfg.value); err != nil {
+		if err := cm.updateIPFSConfigJSON(cfg.key, cfg.value); err != nil {
 			return err
 		}
 	}
@@ -183,8 +183,8 @@ func (cm *ConnectionManager) applyBoostConfig() error {
 	return nil
 }
 
-// updateIPFSConfig updates IPFS configuration via CLI
-func (cm *ConnectionManager) updateIPFSConfig(key, value string) error {
+// updateIPFSConfigJSON updates IPFS configuration via CLI with --json flag
+func (cm *ConnectionManager) updateIPFSConfigJSON(key, value string) error {
 	if cm.ipfsMgr == nil || cm.ipfsMgr.BinPath == "" {
 		return fmt.Errorf("ipfs manager not available")
 	}
@@ -192,7 +192,7 @@ func (cm *ConnectionManager) updateIPFSConfig(key, value string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, cm.ipfsMgr.BinPath, "config", key, value)
+	cmd := exec.CommandContext(ctx, cm.ipfsMgr.BinPath, "config", "--json", key, value)
 	cmd.Env = append(cmd.Env, "IPFS_PATH="+cm.ipfsMgr.DataDir)
 
 	if output, err := cmd.CombinedOutput(); err != nil {

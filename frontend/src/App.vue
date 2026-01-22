@@ -144,67 +144,22 @@ const handlePreview = (file: any) => {
 };
 
 const handleDownload = async (file: any) => {
-    // Validate CID
     if (!file.cid) {
         toastStore.error("Error: File CID is missing. Please re-upload this file.");
         return;
     }
 
-    // Determine Strategy
-    // Strategy A: Frontend FileSystem API / Blob (Interactive or Fallback)
-    // Strategy B: Backend Silent Download (Only if path set, ask disabled, and file not encrypted)
-    
-    const isEncrypted = file.encryption_type === 'password' || file.encryption_type === 'private';
-    const useBackendSilent = !settingsStore.askPath && settingsStore.downloadPath && !isEncrypted;
-
     try {
-        if (useBackendSilent) {
-             await taskStore.startBackendDownload(file.id, file.name, file.password);
-             toastStore.success(`Download started for ${file.name}`);
-             return;
-        }
-
-        const taskId = taskStore.addTask('download', file.name);
+        await taskStore.startBackendDownload(
+            file.id,
+            file.name,
+            file.password,
+            file.encryption_type,
+            file.encryption_meta
+        );
         toastStore.success(`Download started for ${file.name}`);
-
-        // Strategy A: Frontend Download (Interactive)
-        let fileHandle = null;
-        
-        // Try File System Access API first if "Ask Path" is enabled
-        if (settingsStore.askPath) {
-             try {
-                // @ts-ignore
-                if (window.showSaveFilePicker) {
-                    // @ts-ignore
-                    fileHandle = await window.showSaveFilePicker({
-                        suggestedName: file.name
-                    });
-                }
-             } catch (err: any) {
-                 if (err.name === 'AbortError') {
-                     taskStore.removeTask(taskId);
-                     return;
-                 }
-                 console.warn("FileSystemAccess API failed/cancelled, falling back to Blob", err);
-             }
-        }
-        
-        // Construct URL
-        let url = `/preview/${file.cid}?download=true`;
-        if (file.password) {
-            url += `&password=${encodeURIComponent(file.password)}`;
-            url += `&type=password`;
-        } else if (file.encryption_type) {
-            url += `&type=${file.encryption_type}`;
-        }
-        
-        // Delegate to Task Store
-        // This handles: Fetching, Progress, Speed, Pause/Resume, Writing (Disk or Blob)
-        taskStore.startDownload(url, file.name, fileHandle, taskId);
-
     } catch (e: any) {
         console.error(e);
-        taskStore.failTask(taskId, e.message || 'Download failed');
         toastStore.error(`Download failed: ${e.message}`);
     }
 };

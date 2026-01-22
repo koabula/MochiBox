@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ipfs/boxo/files"
@@ -12,12 +13,25 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 )
 
+type cacheEntry struct {
+	providers  []peer.AddrInfo
+	cachedAt   time.Time
+	isNegative bool // true if no providers were found
+}
+
 type DownloadBooster struct {
 	node          *MochiNode
-	providerCache sync.Map // string(CID) -> []peer.AddrInfo
+	providerCache sync.Map // string(CID) -> *cacheEntry
 	connPool      sync.Map // string(peer.ID) -> int64 (latency in ms)
 	mu            sync.RWMutex
 }
+
+const (
+	negativeCacheTTL         = 30 * time.Second // Cache "no providers" for 30s
+	positiveCacheTTL         = 5 * time.Minute  // Cache valid providers for 5min
+	minProvidersForEarlyExit = 2                // Exit early after finding this many
+	maxConnectedForEarlyExit = 1                // Exit early after connecting to this many
+)
 
 func NewDownloadBooster(node *MochiNode) *DownloadBooster {
 	return &DownloadBooster{
@@ -26,17 +40,33 @@ func NewDownloadBooster(node *MochiNode) *DownloadBooster {
 }
 
 // WarmupCID discovers providers for a CID and pre-establishes connections
+// Features:
+// - Early exit: returns as soon as enough providers are found and connected
+// - Negative cache: caches "no providers" for 30s to avoid repeated discovery
+// - Positive cache: reuses previously found providers
 func (db *DownloadBooster) WarmupCID(ctx context.Context, cid string) error {
 	if db.node == nil {
 		return fmt.Errorf("node not initialized")
 	}
 
-	// Check if already cached
+	// Check cache first
 	if cached, ok := db.providerCache.Load(cid); ok {
-		providers := cached.([]peer.AddrInfo)
-		if len(providers) > 0 {
-			log.Printf("Using cached providers for CID %s: %d providers", cid, len(providers))
-			return nil
+		entry := cached.(*cacheEntry)
+		age := time.Since(entry.cachedAt)
+
+		if entry.isNegative {
+			// Negative cache: check if expired
+			if age < negativeCacheTTL {
+				log.Printf("Negative cache hit for CID %s (age: %v), skipping discovery", cid, age)
+				return fmt.Errorf("no providers found (cached)")
+			}
+			// Expired, continue with discovery
+		} else if len(entry.providers) > 0 {
+			// Positive cache: check if still valid
+			if age < positiveCacheTTL {
+				log.Printf("Using cached providers for CID %s: %d providers (age: %v)", cid, len(entry.providers), age)
+				return nil
+			}
 		}
 	}
 
@@ -49,8 +79,19 @@ func (db *DownloadBooster) WarmupCID(ctx context.Context, cid string) error {
 	}
 
 	var providers []peer.AddrInfo
+	var connectedCount int32
 	timeout := time.After(10 * time.Second)
-	fastConnCount := 0
+	earlyExit := make(chan struct{})
+
+	// Track connection success for early exit
+	onConnected := func() {
+		if atomic.AddInt32(&connectedCount, 1) >= maxConnectedForEarlyExit {
+			select {
+			case earlyExit <- struct{}{}:
+			default:
+			}
+		}
+	}
 
 	for {
 		select {
@@ -61,11 +102,29 @@ func (db *DownloadBooster) WarmupCID(ctx context.Context, cid string) error {
 			providers = append(providers, p)
 			log.Printf("Found provider %d: %s", len(providers), p.ID.String())
 
-			// Immediately connect to first few providers for fast start
-			if fastConnCount < 3 {
-				fastConnCount++
-				go db.connectWithRetry(ctx, p)
+			// Connect immediately and track success
+			go func(info peer.AddrInfo) {
+				if db.connectProvider(ctx, info) {
+					onConnected()
+				}
+			}(p)
+
+			// Early exit check: enough providers found
+			if len(providers) >= minProvidersForEarlyExit {
+				log.Printf("Found %d providers, checking for early exit", len(providers))
+				// Give a short window for connection to complete
+				select {
+				case <-earlyExit:
+					log.Printf("Early exit: connected to provider, proceeding with download")
+					goto ConnectPhase
+				case <-time.After(500 * time.Millisecond):
+					// Continue collecting more providers
+				}
 			}
+
+		case <-earlyExit:
+			log.Printf("Early exit triggered: connected to provider")
+			goto ConnectPhase
 
 		case <-timeout:
 			log.Printf("Provider discovery timeout, found %d providers", len(providers))
@@ -77,84 +136,59 @@ func (db *DownloadBooster) WarmupCID(ctx context.Context, cid string) error {
 	}
 
 ConnectPhase:
-	// Cache providers
-	db.providerCache.Store(cid, providers)
+	// Cache the result
+	entry := &cacheEntry{
+		providers:  providers,
+		cachedAt:   time.Now(),
+		isNegative: len(providers) == 0,
+	}
+	db.providerCache.Store(cid, entry)
 
 	if len(providers) == 0 {
 		return fmt.Errorf("no providers found for CID")
 	}
 
-	// Connect to remaining providers in background
-	go db.batchConnect(context.Background(), providers, fastConnCount)
-
-	// Actively prefetch first block to trigger Bitswap session
+	// Prefetch first block in background
 	go db.prefetchFirstBlock(context.Background(), cid)
 
 	log.Printf("Warmup complete for CID %s: %d providers discovered", cid, len(providers))
 	return nil
 }
 
-// connectWithRetry attempts to connect to a provider and measures latency
-func (db *DownloadBooster) connectWithRetry(ctx context.Context, info peer.AddrInfo) {
+// connectProvider attempts to connect to a provider and returns success status
+func (db *DownloadBooster) connectProvider(ctx context.Context, info peer.AddrInfo) bool {
 	if len(info.Addrs) == 0 {
-		log.Printf("No addresses for peer %s", info.ID.String())
-		return
+		return false
 	}
 
 	// Build multiaddr string
 	addr := fmt.Sprintf("%s/p2p/%s", info.Addrs[0].String(), info.ID.String())
 
-	// Measure connection latency
+	// Use short timeout for connection
+	connCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
 	start := time.Now()
-	err := db.node.Connect(ctx, addr)
+	err := db.node.Connect(connCtx, addr)
 	latency := time.Since(start)
 
 	if err != nil {
 		log.Printf("Failed to connect to provider %s: %v", info.ID.String(), err)
-		return
+		return false
 	}
 
 	// Record connection quality
 	db.connPool.Store(info.ID.String(), latency.Milliseconds())
 	log.Printf("Connected to provider %s (latency: %dms)", info.ID.String(), latency.Milliseconds())
 
-	// Add to peering for connection protection
+	// Add to peering in background
 	go func() {
 		peerCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := db.node.PeeringAdd(peerCtx, addr); err != nil {
-			log.Printf("Warning: Failed to add peer to peering list: %v", err)
-		}
+		db.node.PeeringAdd(peerCtx, addr)
 	}()
-}
 
-// batchConnect connects to multiple providers in parallel
-func (db *DownloadBooster) batchConnect(ctx context.Context, providers []peer.AddrInfo, skipFirst int) {
-	if len(providers) <= skipFirst {
-		return
-	}
-
-	remaining := providers[skipFirst:]
-	var wg sync.WaitGroup
-
-	// Limit concurrent connections
-	semaphore := make(chan struct{}, 5)
-
-	for _, p := range remaining {
-		wg.Add(1)
-		go func(info peer.AddrInfo) {
-			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
-
-			connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-			defer cancel()
-
-			db.connectWithRetry(connectCtx, info)
-		}(p)
-	}
-
-	wg.Wait()
+	return true
 }
 
 // prefetchFirstBlock actively fetches the first block to trigger Bitswap session
@@ -190,9 +224,26 @@ func (db *DownloadBooster) prefetchFirstBlock(ctx context.Context, cid string) {
 // GetCachedProviders returns cached providers for a CID
 func (db *DownloadBooster) GetCachedProviders(cid string) []peer.AddrInfo {
 	if cached, ok := db.providerCache.Load(cid); ok {
-		return cached.([]peer.AddrInfo)
+		entry := cached.(*cacheEntry)
+		if !entry.isNegative && time.Since(entry.cachedAt) < positiveCacheTTL {
+			return entry.providers
+		}
 	}
 	return nil
+}
+
+// HasCachedProviders checks if valid providers are cached for a CID
+func (db *DownloadBooster) HasCachedProviders(cid string) bool {
+	if cached, ok := db.providerCache.Load(cid); ok {
+		entry := cached.(*cacheEntry)
+		if entry.isNegative {
+			return false
+		}
+		if len(entry.providers) > 0 && time.Since(entry.cachedAt) < positiveCacheTTL {
+			return true
+		}
+	}
+	return false
 }
 
 // GetConnectionQuality returns connection latency for a peer

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Download, Eye, FileText, X, Pin, Lock, Globe, UserCheck, Copy } from 'lucide-vue-next';
+import { Download, Eye, FileText, X, Pin, Lock, Globe, UserCheck, Copy, CheckCircle } from 'lucide-vue-next';
 import { ref, watch, computed } from 'vue';
 import { useToastStore } from '@/stores/toast';
 import { copyToClipboard } from '@/utils/clipboard';
@@ -11,6 +11,8 @@ const props = defineProps<{
   peersCount?: number;
   connectStatus?: string; // 'idle' | 'connecting' | 'done'
   connectResult?: any;
+  cidVerified?: boolean;
+  cidSize?: number;
 }>();
 
 const emit = defineEmits(['close', 'preview', 'download', 'pin']);
@@ -23,7 +25,23 @@ watch(() => props.isOpen, (newVal) => {
 });
 
 const isSearching = computed(() => props.searchStatus === 'searching');
-const hasPeers = computed(() => (props.peersCount || 0) > 0 || (props.connectResult?.connected || 0) > 0);
+const isConnecting = computed(() => props.connectStatus === 'connecting');
+
+// File is ready when: CID is verified OR we found peers via DHT search
+const isReady = computed(() => {
+    return props.cidVerified || (props.peersCount || 0) > 0;
+});
+
+// Still loading if: searching DHT OR connecting to peers (and not yet verified)
+const isLoading = computed(() => {
+    return (isSearching.value || isConnecting.value) && !isReady.value;
+});
+
+// Display size - prefer verified size, fallback to sharedData size
+const displaySize = computed(() => {
+    if (props.cidSize && props.cidSize > 0) return props.cidSize;
+    return props.sharedData?.size || 0;
+});
 
 const handleAction = (action: 'preview' | 'download') => {
     emit(action, passwordInput.value);
@@ -50,6 +68,14 @@ const copyConnectReport = async () => {
     } else {
         toastStore.error('Failed to copy');
     }
+};
+
+const formatSize = (bytes: number) => {
+    if (!bytes || bytes === 0) return 'Unknown';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
 };
 </script>
 
@@ -86,8 +112,8 @@ const copyConnectReport = async () => {
                 
                 <div class="flex items-center gap-2 mt-2">
                     <!-- Size Badge -->
-                    <span v-if="sharedData?.size !== undefined" class="text-xs font-mono text-nord-3 dark:text-nord-4 bg-white dark:bg-nord-3 px-2 py-0.5 rounded border border-nord-4 dark:border-nord-2">
-                        {{ sharedData.size === 0 ? 'Unknown' : sharedData.size }}
+                    <span class="text-xs font-mono text-nord-3 dark:text-nord-4 bg-white dark:bg-nord-3 px-2 py-0.5 rounded border border-nord-4 dark:border-nord-2">
+                        {{ formatSize(displaySize) }}
                     </span>
                     
                     <!-- Encryption Badge -->
@@ -118,10 +144,15 @@ const copyConnectReport = async () => {
         
         <div v-if="connectStatus && connectStatus !== 'idle'" class="flex items-center justify-center gap-2 p-3 bg-nord-6 dark:bg-nord-2 rounded-xl text-sm transition-all duration-300">
              <div v-if="connectStatus === 'connecting'" class="w-2 h-2 rounded-full bg-nord-10 animate-ping"></div>
-             <span v-if="connectStatus === 'connecting'" class="text-nord-3 dark:text-nord-4 font-medium">Trying direct connect...</span>
-             <span v-else-if="connectResult?.status === 'done'" class="text-nord-3 dark:text-nord-4 font-medium">
-                Direct connect {{ connectResult.connected }} / {{ connectResult.attempted }}
-             </span>
+             <span v-if="connectStatus === 'connecting'" class="text-nord-3 dark:text-nord-4 font-medium">Connecting to peers...</span>
+             <template v-else-if="connectResult?.status === 'done'">
+                <span class="text-nord-3 dark:text-nord-4 font-medium">
+                    Direct connect {{ connectResult.connected }} / {{ connectResult.attempted }}
+                </span>
+                <span v-if="cidVerified" class="text-green-600 dark:text-green-400 font-bold flex items-center gap-1 ml-2">
+                    <CheckCircle class="w-4 h-4" /> Verified
+                </span>
+             </template>
              <span v-else-if="connectResult?.status === 'error'" class="text-red-500 font-medium">Direct connect failed</span>
              <button v-if="connectResult" @click="copyConnectReport" class="ml-2 p-1 text-nord-3 dark:text-nord-4 hover:text-nord-10 transition-colors" title="Copy connect report">
                 <Copy class="w-4 h-4" />
@@ -129,7 +160,7 @@ const copyConnectReport = async () => {
         </div>
 
         <!-- Search Status -->
-        <div v-if="searchStatus && searchStatus !== 'idle'" class="flex items-center justify-center gap-2 p-3 bg-nord-6 dark:bg-nord-2 rounded-xl text-sm transition-all duration-300">
+        <div v-if="searchStatus && searchStatus !== 'idle' && !cidVerified" class="flex items-center justify-center gap-2 p-3 bg-nord-6 dark:bg-nord-2 rounded-xl text-sm transition-all duration-300">
              <div v-if="searchStatus === 'searching'" class="w-2 h-2 rounded-full bg-nord-10 animate-ping"></div>
              <span v-if="searchStatus === 'searching'" class="text-nord-3 dark:text-nord-4 font-medium">Searching DHT network...</span>
              <span v-else-if="searchStatus === 'found'" class="text-green-600 dark:text-green-400 font-bold flex items-center gap-2">
@@ -142,24 +173,24 @@ const copyConnectReport = async () => {
         <div class="flex gap-3">
             <button 
                 @click="handleAction('preview')"
-                :disabled="isSearching && !hasPeers"
-                :class="{'opacity-50 cursor-not-allowed': isSearching && !hasPeers}"
+                :disabled="isLoading"
+                :class="{'opacity-50 cursor-not-allowed': isLoading}"
                 class="flex-1 py-3 px-4 bg-white dark:bg-nord-3 border border-nord-4 dark:border-nord-2 hover:bg-nord-5 dark:hover:bg-nord-2 text-nord-1 dark:text-nord-6 font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
             >
                 <Eye class="w-4 h-4" /> Preview
             </button>
             <button 
                 @click="handleAction('download')"
-                :disabled="isSearching && !hasPeers"
-                :class="{'opacity-50 cursor-not-allowed': isSearching && !hasPeers}"
+                :disabled="isLoading"
+                :class="{'opacity-50 cursor-not-allowed': isLoading}"
                 class="flex-1 py-3 px-4 bg-nord-10 hover:bg-nord-9 text-white font-medium rounded-xl transition-colors shadow-lg shadow-nord-10/20 flex items-center justify-center gap-2"
             >
                 <Download class="w-4 h-4" /> Download
             </button>
             <button 
                 @click="$emit('pin')"
-                :disabled="isSearching && !hasPeers"
-                :class="{'opacity-50 cursor-not-allowed': isSearching && !hasPeers}"
+                :disabled="isLoading"
+                :class="{'opacity-50 cursor-not-allowed': isLoading}"
                 class="py-3 px-4 bg-white dark:bg-nord-3 border border-nord-4 dark:border-nord-2 hover:bg-nord-5 dark:hover:bg-nord-2 text-nord-1 dark:text-nord-6 font-medium rounded-xl transition-colors flex items-center justify-center gap-2"
                 title="Pin to Local Node"
             >
