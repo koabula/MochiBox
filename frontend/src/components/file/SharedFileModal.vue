@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Download, Eye, FileText, X, Pin, Lock, Globe, UserCheck, Copy, CheckCircle } from 'lucide-vue-next';
+import { Download, Eye, FileText, X, Pin, Lock, Globe, UserCheck, Copy, CheckCircle, ShieldCheck } from 'lucide-vue-next';
 import { ref, watch, computed } from 'vue';
 import { useToastStore } from '@/stores/toast';
 import { copyToClipboard } from '@/utils/clipboard';
@@ -70,6 +70,17 @@ const copyConnectReport = async () => {
     }
 };
 
+const copySignedBy = async () => {
+    const pk = String(props.sharedData?.signed_by || '').trim();
+    if (!pk) return;
+    const success = await copyToClipboard(pk);
+    if (success) {
+        toastStore.success('Public key copied');
+    } else {
+        toastStore.error('Failed to copy');
+    }
+};
+
 const formatSize = (bytes: number) => {
     if (!bytes || bytes === 0) return 'Unknown';
     const k = 1024;
@@ -126,6 +137,12 @@ const formatSize = (bytes: number) => {
                     <div v-else class="flex items-center gap-1 px-2 py-0.5 bg-nord-4 dark:bg-nord-3 text-nord-2 dark:text-nord-4 rounded text-xs font-bold uppercase border border-nord-5 dark:border-nord-2">
                         <Globe class="w-3 h-3" /> Public
                     </div>
+                </div>
+
+                <!-- Signed Badge -->
+                <div v-if="sharedData?.signed_by" class="flex items-center gap-1 mt-2 text-xs font-mono text-green-600 dark:text-green-400 bg-green-50 dark:bg-green-900/10 px-2 py-1 rounded border border-green-200 dark:border-green-900/30 w-fit cursor-pointer hover:bg-green-100 dark:hover:bg-green-900/20 transition-colors" @click="copySignedBy" :title="sharedData.signed_by">
+                    <ShieldCheck class="w-3 h-3" />
+                    <span class="truncate max-w-[250px]">Signed by {{ sharedData.signed_by }}</span>
                 </div>
             </div>
         </div>

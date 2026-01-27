@@ -1,6 +1,8 @@
 package api
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"net/http"
 	
 	"mochibox-core/crypto"
@@ -20,7 +22,75 @@ func (s *Server) registerAccountRoutes(api *gin.RouterGroup) {
 		acc.POST("/generate-mnemonic", s.handleGenerateMnemonic)
 		acc.POST("/export", s.handleAccountExport)
 		acc.POST("/change-password", s.handleAccountChangePassword)
+		acc.POST("/sign", s.handleAccountSign)
+		acc.POST("/verify-signature", s.handleAccountVerifySignature)
 	}
+}
+
+func (s *Server) handleAccountSign(c *gin.Context) {
+	var req struct {
+		Message string `json:"message" binding:"required"` // Base64
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	data, err := base64.StdEncoding.DecodeString(req.Message)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid base64 message"})
+		return
+	}
+
+	sig, err := s.AccountManager.Sign(data)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+		return
+	}
+
+	profile, err := s.AccountManager.GetProfile()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get profile"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"signature":  hex.EncodeToString(sig),
+		"public_key": profile.PublicKey, // already hex
+	})
+}
+
+func (s *Server) handleAccountVerifySignature(c *gin.Context) {
+	var req struct {
+		Message   string `json:"message" binding:"required"`    // Base64
+		Signature string `json:"signature" binding:"required"`  // Hex
+		PublicKey string `json:"public_key" binding:"required"` // Hex
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	data, err := base64.StdEncoding.DecodeString(req.Message)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid base64 message"})
+		return
+	}
+
+	sig, err := hex.DecodeString(req.Signature)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid signature hex"})
+		return
+	}
+
+	pubKey, err := hex.DecodeString(req.PublicKey)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid public key hex"})
+		return
+	}
+
+	valid := s.AccountManager.Verify(data, sig, pubKey)
+	c.JSON(http.StatusOK, gin.H{"valid": valid})
 }
 
 func (s *Server) handleAccountExport(c *gin.Context) {

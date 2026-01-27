@@ -320,6 +320,9 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 	defer cancel()
 
 	var wg sync.WaitGroup
+	var mu sync.Mutex
+	attempted := 0
+	connected := 0
 
 	// 1. Connect to Bootstrap Peers
 	for _, addrStr := range bootstrapPeers {
@@ -328,8 +331,18 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 			wg.Add(1)
 			go func(info *peer.AddrInfo) {
 				defer wg.Done()
-				// We ignore errors here as we just want to try connecting
-				_ = s.Node.IPFS.Swarm().Connect(ctx, *info)
+				mu.Lock()
+				attempted++
+				mu.Unlock()
+
+				pCtx, pCancel := context.WithTimeout(ctx, 5*time.Second)
+				defer pCancel()
+
+				if err := s.Node.IPFS.Swarm().Connect(pCtx, *info); err == nil {
+					mu.Lock()
+					connected++
+					mu.Unlock()
+				}
 			}(addrInfo)
 		}
 	}
@@ -356,5 +369,9 @@ func (s *Server) handleBootstrap(c *gin.Context) {
 		_, _ = s.Node.IPFS.Routing().FindPeer(ctx, selfKey.ID())
 	}
 
-	c.JSON(http.StatusOK, gin.H{"message": "Network boost finished"})
+	c.JSON(http.StatusOK, gin.H{
+		"message":   "Network boost finished",
+		"attempted": attempted,
+		"connected": connected,
+	})
 }

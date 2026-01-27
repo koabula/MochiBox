@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Copy, X, Shield, Link, Network } from 'lucide-vue-next';
+import { Copy, X, Shield, Link, Network, ShieldCheck } from 'lucide-vue-next';
 import { useToastStore } from '@/stores/toast';
 import { ref } from 'vue';
 import api from '@/api';
@@ -14,6 +14,7 @@ const emit = defineEmits(['close']);
 const toast = useToastStore();
 const includePassword = ref(false);
 const includeNodeInfo = ref(false); // Default unchecked
+const includeSignature = ref(false);
 const passwordInput = ref('');
 
 import { watch } from 'vue';
@@ -22,8 +23,20 @@ watch(() => props.isOpen, (newVal) => {
         includePassword.value = false;
         passwordInput.value = '';
         includeNodeInfo.value = false;
+        includeSignature.value = false;
     }
 });
+
+const encodeBase64Utf8 = (text: string) => {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(text);
+    let binary = '';
+    const len = data.byteLength;
+    for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(data[i]);
+    }
+    return btoa(binary);
+};
 
 watch(includePassword, async (val) => {
     if (val && !passwordInput.value && props.file.saved_password) {
@@ -97,22 +110,26 @@ const handleCopy = async () => {
     }
     
     try {
-        const jsonStr = JSON.stringify(payload);
-        const encoder = new TextEncoder();
-        const data = encoder.encode(jsonStr);
-        
-        let binary = '';
-        const len = data.byteLength;
-        for (let i = 0; i < len; i++) {
-            binary += String.fromCharCode(data[i]);
+        let jsonStr = JSON.stringify(payload);
+
+        if (includeSignature.value) {
+            const base64Payload = encodeBase64Utf8(jsonStr);
+            const res = await api.post('/account/sign', { message: base64Payload });
+            jsonStr = JSON.stringify({
+                v: 2,
+                p: base64Payload,
+                k: res.data.public_key,
+                s: res.data.signature
+            });
         }
 
-        const base64Str = btoa(binary);
+        const base64Str = encodeBase64Utf8(jsonStr);
         const shareLink = `mochi://${base64Str}`;
         
         const success = await copyToClipboard(shareLink);
         if (success) {
             toast.success('Mochi Link copied to clipboard!');
+            api.post('/shared/provide', { cid: props.file.cid }).catch(() => {});
             emit('close');
         } else {
             toast.error('Failed to copy to clipboard');
@@ -125,6 +142,10 @@ const handleCopy = async () => {
 
 const toggleNodeInfo = () => {
     includeNodeInfo.value = !includeNodeInfo.value;
+};
+
+const toggleSignature = () => {
+    includeSignature.value = !includeSignature.value;
 };
 
 const close = () => {
@@ -159,6 +180,17 @@ const close = () => {
                       <Network class="w-4 h-4" /> Include Node Info
                   </label>
                   <p class="text-xs text-nord-3 dark:text-nord-4">Helps recipients find the file faster (Direct Connect)</p>
+              </div>
+          </div>
+
+          <!-- Option: Include Signature -->
+          <div class="flex items-center gap-3 p-3 rounded-lg hover:bg-nord-6 dark:hover:bg-nord-2 transition-colors cursor-pointer border border-transparent hover:border-nord-4 dark:hover:border-nord-3 select-none" @click="toggleSignature">
+              <input type="checkbox" id="includeSig" v-model="includeSignature" class="w-5 h-5 text-nord-10 rounded focus:ring-nord-10 cursor-pointer" @click.stop />
+              <div class="flex-1 pointer-events-none">
+                  <label class="text-sm font-bold text-nord-1 dark:text-nord-6 flex items-center gap-2 mb-0.5">
+                      <ShieldCheck class="w-4 h-4" /> Include Digital Signature
+                  </label>
+                  <p class="text-xs text-nord-3 dark:text-nord-4">Sign with your identity key so recipients can verify the sender</p>
               </div>
           </div>
 

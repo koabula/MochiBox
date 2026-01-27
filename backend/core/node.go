@@ -478,6 +478,20 @@ func (n *MochiNode) FindProviders(ctx context.Context, cidStr string) (<-chan pe
     return n.IPFS.Routing().FindProviders(ctx, cidPath)
 }
 
+func (n *MochiNode) Provide(ctx context.Context, cidStr string) error {
+	p := cidStr
+	if !strings.HasPrefix(p, "/ipfs/") {
+		p = "/ipfs/" + p
+	}
+
+	cidPath, err := path.NewPath(p)
+	if err != nil {
+		return err
+	}
+
+	return n.IPFS.Routing().Provide(ctx, cidPath)
+}
+
 func (n *MochiNode) Connect(ctx context.Context, maStr string) error {
     maStr = strings.TrimSpace(maStr)
     if maStr == "" {

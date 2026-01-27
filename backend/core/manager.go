@@ -113,7 +113,17 @@ func (m *IpfsManager) ConfigRepo() error {
 		}
 	}
 
-	configs := [][]string{
+	const configVersion = "2026-01-27-2"
+	markerPath := filepath.Join(m.DataDir, "mochibox.ipfs.config.version")
+	if strings.TrimSpace(os.Getenv("MOCHIBOX_FORCE_CONFIG")) == "" {
+		if b, err := os.ReadFile(markerPath); err == nil {
+			if strings.TrimSpace(string(b)) == configVersion {
+				return nil
+			}
+		}
+	}
+
+	criticalConfigs := [][]string{
 		{"Addresses.API", `"/ip4/127.0.0.1/tcp/0"`},
 		{"Addresses.Gateway", `"/ip4/127.0.0.1/tcp/0"`},
 		// Enable CORS for frontend
@@ -121,11 +131,13 @@ func (m *IpfsManager) ConfigRepo() error {
 		{"API.HTTPHeaders.Access-Control-Allow-Methods", `["PUT", "POST", "GET"]`},
 		{"Discovery.MDNS.Enabled", strconv.FormatBool(mdnsEnabled)},
 		{"Pubsub.Router", `"gossipsub"`},
+	}
 
+	optionalConfigs := [][]string{
 		// Optimization: DHT & NAT
 		{"Routing.Type", `"dht"`}, // Force DHT (Server mode if possible, or auto)
 		{"Swarm.EnableAutoNATService", "true"},
-		{"Experimental.AcceleratedDHTClient", "true"}, // Fast DHT
+		{"Routing.AcceleratedDHTClient", "true"}, // Fast DHT (Kubo >= 0.21)
 
 		// Optimization: Connection Manager
 		// Higher defaults for stable p2p connections (both downloading and sharing)
@@ -149,9 +161,6 @@ func (m *IpfsManager) ConfigRepo() error {
 
 		// === Phase 1 Optimization: Enhanced IPFS Configuration ===
 
-		// Graphsync protocol (more efficient than Bitswap for large files)
-		{"Experimental.GraphsyncEnabled", "true"},
-
 		// Block storage optimization with bloom filter for faster lookups
 		{"Datastore.BloomFilterSize", "1048576"}, // 1MB bloom filter
 
@@ -169,13 +178,23 @@ func (m *IpfsManager) ConfigRepo() error {
 		{"Swarm.Transports.Network.Bitswap.TargetMessageSize", `"2MB"`},
 	}
 
-	for _, cfg := range configs {
+	for _, cfg := range criticalConfigs {
 		cmd := exec.Command(m.BinPath, "config", "--json", cfg[0], cfg[1])
 		cmd.Env = append(os.Environ(), "IPFS_PATH="+m.DataDir)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			return fmt.Errorf("config %s failed: %v, out: %s", cfg[0], err, string(out))
 		}
 	}
+
+	for _, cfg := range optionalConfigs {
+		cmd := exec.Command(m.BinPath, "config", "--json", cfg[0], cfg[1])
+		cmd.Env = append(os.Environ(), "IPFS_PATH="+m.DataDir)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			log.Printf("Warning: Failed to apply optional config %s: %v, out: %s", cfg[0], err, string(out))
+		}
+	}
+
+	_ = os.WriteFile(markerPath, []byte(configVersion), 0644)
 	return nil
 }
 

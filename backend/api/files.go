@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -571,6 +572,19 @@ func (s *Server) handleUpload(c *gin.Context, database *gorm.DB) {
 				return
 			}
 		}
+	}
+
+	if cid != "" {
+		if err := s.Node.Pin(c.Request.Context(), cid); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to pin: " + err.Error()})
+			return
+		}
+
+		go func(cid string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			_ = s.Node.Provide(ctx, cid)
+		}(cid)
 	}
 
 	// 3. Save Metadata to DB

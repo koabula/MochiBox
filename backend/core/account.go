@@ -3,6 +3,7 @@ package core
 import (
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -182,6 +183,26 @@ func (m *AccountManager) Reset() error {
     crypto.ClearAuthLock(m.DataDir)
     
     return nil
+}
+
+// Sign signs data using the wallet's private key
+func (m *AccountManager) Sign(data []byte) ([]byte, error) {
+	m.Mutex.RLock()
+	defer m.Mutex.RUnlock()
+
+	if m.Wallet == nil {
+		return nil, errors.New("wallet locked")
+	}
+
+	return m.Wallet.Sign(data), nil
+}
+
+// Verify verifies a signature
+func (m *AccountManager) Verify(data, signature, publicKey []byte) bool {
+	if len(publicKey) != ed25519.PublicKeySize {
+		return false
+	}
+	return ed25519.Verify(publicKey, data, signature)
 }
 
 // DecryptBox decrypts a sealed box using the account's private key

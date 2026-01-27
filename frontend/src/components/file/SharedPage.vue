@@ -78,6 +78,7 @@ const handleImportShared = async () => {
         let encryptionMeta = '';
         let embeddedPassword = '';
         let peers: string[] = [];
+        let signedBy = '';
 
         // Reset Search State
         searchStatus.value = 'idle';
@@ -106,7 +107,28 @@ const handleImportShared = async () => {
                 const decoder = new TextDecoder();
                 const jsonStr = decoder.decode(bytes);
                 
-                const payload = JSON.parse(jsonStr);
+                const decodeBase64Utf8 = (b64: string) => {
+                    const bin = atob(b64);
+                    const b = new Uint8Array(bin.length);
+                    for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+                    const d = new TextDecoder();
+                    return d.decode(b);
+                };
+
+                let payload = JSON.parse(jsonStr);
+
+                if (payload && payload.v === 2 && payload.p && payload.k && payload.s) {
+                    const res = await api.post('/account/verify-signature', {
+                        message: payload.p,
+                        signature: payload.s,
+                        public_key: payload.k
+                    });
+                    if (!res.data.valid) {
+                        throw new Error("Invalid Digital Signature");
+                    }
+                    signedBy = payload.k;
+                    payload = JSON.parse(decodeBase64Utf8(payload.p));
+                }
                 
                 cid = payload.c;
                 name = payload.n || '';
@@ -165,7 +187,8 @@ const handleImportShared = async () => {
             size,
             mime_type: mimeType,
             encryption_type: encryptionType,
-            encryption_meta: encryptionMeta
+            encryption_meta: encryptionMeta,
+            signed_by: signedBy
         };
         if (embeddedPassword) {
             modalFile.embedded_password = embeddedPassword;
@@ -237,7 +260,8 @@ const handleImportShared = async () => {
                 saved.encryption_meta = encryptionMeta;
                 if (embeddedPassword) saved.embedded_password = embeddedPassword;
                 if (sharedModalData.value?.cid === cid) {
-                    sharedModalData.value = { ...sharedModalData.value, ...saved };
+                    const currentSignedBy = sharedModalData.value?.signed_by || '';
+                    sharedModalData.value = { ...sharedModalData.value, ...saved, signed_by: currentSignedBy };
                 }
                 toastStore.success('Added to history');
             })

@@ -22,6 +22,7 @@ func (s *Server) registerSharedRoutes(api *gin.RouterGroup) {
 		shared.DELETE("/history/:id", s.handleDeleteSharedHistory)
 		shared.DELETE("/history", s.handleClearSharedHistory)
 		shared.POST("/pin", s.handlePinShared)
+		shared.POST("/provide", s.handleSharedProvide)
 		shared.GET("/search/:cid", s.handleSearchShared)
 		shared.POST("/connect", s.handleSharedConnect)
 		shared.POST("/verify", s.handleVerifyCID)
@@ -98,6 +99,26 @@ func (s *Server) handleVerifyCID(c *gin.Context) {
 	})
 }
 
+func (s *Server) handleSharedProvide(c *gin.Context) {
+	var req struct {
+		CID string `json:"cid" binding:"required"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	go func(cid string) {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := s.Node.Provide(ctx, cid); err != nil {
+			log.Printf("Provide failed for CID %s: %v", cid, err)
+		}
+	}(req.CID)
+
+	c.JSON(http.StatusOK, gin.H{"status": "queued"})
+}
+
 func (s *Server) handleSharedConnect(c *gin.Context) {
 	var req struct {
 		Peers []string `json:"peers"`
@@ -165,8 +186,6 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 		}
 	}
 
-	// If at least one connection succeeded and CID provided, clear negative cache
-	// This is important because direct connect may succeed after provider discovery timed out
 	if connected > 0 && req.CID != "" {
 		s.DownloadBooster.ClearCacheForCID(req.CID)
 	}
@@ -178,15 +197,12 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 		"results":   results,
 	}
 
-	// If CID provided and at least one connection succeeded, verify CID availability
-	if req.CID != "" && connected > 0 {
+	if req.CID != "" {
 		verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer verifyCancel()
 
-		// Start warmup for the CID
 		go s.DownloadBooster.WarmupCID(context.Background(), req.CID)
 
-		// Quick stat to check availability
 		size, err := s.Node.GetFileSize(verifyCtx, req.CID)
 		if err == nil {
 			response["cid_available"] = true
