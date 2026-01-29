@@ -156,7 +156,7 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 	for i, addr := range peers {
 		go func(i int, addr string) {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
 			defer cancel()
 			if err := s.Node.Connect(ctx, addr); err != nil {
 				results[i] = connectResult{Addr: addr, OK: false, Error: err.Error()}
@@ -186,7 +186,8 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 		}
 	}
 
-	if connected > 0 && req.CID != "" {
+	// Always clear cache if CID is provided, to allow immediate retry/discovery
+	if req.CID != "" {
 		s.DownloadBooster.ClearCacheForCID(req.CID)
 	}
 

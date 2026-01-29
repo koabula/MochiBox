@@ -151,6 +151,7 @@ func (m *IpfsManager) ConfigRepo() error {
 		// Optimization: Relay Client & Transports
 		{"Swarm.RelayClient.Enabled", "true"},
 		{"Swarm.Transports.Network.Relay", "true"},
+		{"Swarm.EnableHolePunching", "true"},
 
 		// Optimization: QUIC & WebTransport (Faster, better roaming)
 		{"Swarm.Transports.Network.QUIC", "true"},

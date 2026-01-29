@@ -27,7 +27,7 @@ type DownloadBooster struct {
 }
 
 const (
-	negativeCacheTTL         = 30 * time.Second // Cache "no providers" for 30s
+	negativeCacheTTL         = 5 * time.Second // Cache "no providers" for 5s
 	positiveCacheTTL         = 5 * time.Minute  // Cache valid providers for 5min
 	minProvidersForEarlyExit = 2                // Exit early after finding this many
 	maxConnectedForEarlyExit = 1                // Exit early after connecting to this many

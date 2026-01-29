@@ -581,9 +581,11 @@ func (s *Server) handleUpload(c *gin.Context, database *gorm.DB) {
 		}
 
 		go func(cid string) {
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 			defer cancel()
-			_ = s.Node.Provide(ctx, cid)
+			if err := s.Node.Provide(ctx, cid); err != nil {
+				fmt.Printf("Warning: Failed to provide CID %s: %v\n", cid, err)
+			}
 		}(cid)
 	}
 
