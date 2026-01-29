@@ -11,6 +11,7 @@ import (
 	"github.com/ipfs/boxo/files"
 	"github.com/ipfs/boxo/path"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"golang.org/x/sync/singleflight"
 )
 
 type cacheEntry struct {
@@ -24,6 +25,7 @@ type DownloadBooster struct {
 	providerCache sync.Map // string(CID) -> *cacheEntry
 	connPool      sync.Map // string(peer.ID) -> int64 (latency in ms)
 	mu            sync.RWMutex
+	singleFlight  singleflight.Group
 }
 
 const (
@@ -39,122 +41,133 @@ func NewDownloadBooster(node *MochiNode) *DownloadBooster {
 	}
 }
 
-// WarmupCID discovers providers for a CID and pre-establishes connections
-// Features:
-// - Early exit: returns as soon as enough providers are found and connected
-// - Negative cache: caches "no providers" for 30s to avoid repeated discovery
-// - Positive cache: reuses previously found providers
+// WarmupCID starts finding providers for a CID in the background.
+// It caches the results to speed up subsequent downloads.
 func (db *DownloadBooster) WarmupCID(ctx context.Context, cid string) error {
-	if db.node == nil {
-		return fmt.Errorf("node not initialized")
-	}
-
-	// Check cache first
+	// 1. Check Cache first
 	if cached, ok := db.providerCache.Load(cid); ok {
 		entry := cached.(*cacheEntry)
 		age := time.Since(entry.cachedAt)
-
-		if entry.isNegative {
-			// Negative cache: check if expired
-			if age < negativeCacheTTL {
-				log.Printf("Negative cache hit for CID %s (age: %v), skipping discovery", cid, age)
-				return fmt.Errorf("no providers found (cached)")
-			}
-			// Expired, continue with discovery
-		} else if len(entry.providers) > 0 {
-			// Positive cache: check if still valid
+		
+		// If we have providers (especially manually injected ones), use them!
+		if len(entry.providers) > 0 {
 			if age < positiveCacheTTL {
 				log.Printf("Using cached providers for CID %s: %d providers (age: %v)", cid, len(entry.providers), age)
 				return nil
 			}
 		}
-	}
 
-	log.Printf("Starting provider discovery for CID: %s", cid)
-
-	// Find providers
-	provChan, err := db.node.FindProviders(ctx, cid)
-	if err != nil {
-		return fmt.Errorf("failed to find providers: %w", err)
-	}
-
-	var providers []peer.AddrInfo
-	var connectedCount int32
-	timeout := time.After(10 * time.Second)
-	earlyExit := make(chan struct{})
-
-	// Track connection success for early exit
-	onConnected := func() {
-		if atomic.AddInt32(&connectedCount, 1) >= maxConnectedForEarlyExit {
-			select {
-			case earlyExit <- struct{}{}:
-			default:
+		// Negative cache check
+		if entry.isNegative {
+			if age < negativeCacheTTL {
+				log.Printf("Negative cache hit for CID %s (age: %v), skipping discovery", cid, age)
+				return fmt.Errorf("no providers found (cached)")
 			}
 		}
 	}
 
-	for {
-		select {
-		case p, ok := <-provChan:
-			if !ok {
-				goto ConnectPhase
-			}
-			providers = append(providers, p)
-			log.Printf("Found provider %d: %s", len(providers), p.ID.String())
+	// 2. Use SingleFlight to deduplicate concurrent Warmup calls for the same CID
+	_, err, _ := db.singleFlight.Do(cid, func() (interface{}, error) {
+		log.Printf("Starting provider discovery for CID: %s", cid)
 
-			// Connect immediately and track success
-			go func(info peer.AddrInfo) {
-				if db.connectProvider(ctx, info) {
-					onConnected()
-				}
-			}(p)
+		// Create a child context for the discovery process
+		// We want discovery to continue even if the specific request context is cancelled,
+		// but we still want a timeout.
+		findCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 
-			// Early exit check: enough providers found
-			if len(providers) >= minProvidersForEarlyExit {
-				log.Printf("Found %d providers, checking for early exit", len(providers))
-				// Give a short window for connection to complete
+		providers, err := db.node.FindProviders(findCtx, cid)
+		if err != nil {
+			log.Printf("Provider discovery failed for CID %s: %v", cid, err)
+			
+			// Cache negative result
+			db.providerCache.Store(cid, &cacheEntry{
+				cachedAt:   time.Now(),
+				isNegative: true,
+			})
+			return nil, err
+		}
+
+		var finalProviders []peer.AddrInfo
+		var connectedCount int32
+		timeout := time.After(10 * time.Second)
+		earlyExit := make(chan struct{})
+
+		// Track connection success for early exit
+		onConnected := func() {
+			if atomic.AddInt32(&connectedCount, 1) >= maxConnectedForEarlyExit {
 				select {
-				case <-earlyExit:
-					log.Printf("Early exit: connected to provider, proceeding with download")
-					goto ConnectPhase
-				case <-time.After(500 * time.Millisecond):
-					// Continue collecting more providers
+				case earlyExit <- struct{}{}:
+				default:
 				}
 			}
-
-		case <-earlyExit:
-			log.Printf("Early exit triggered: connected to provider")
-			goto ConnectPhase
-
-		case <-timeout:
-			log.Printf("Provider discovery timeout, found %d providers", len(providers))
-			goto ConnectPhase
-
-		case <-ctx.Done():
-			return ctx.Err()
 		}
-	}
 
-ConnectPhase:
-	// Cache the result
-	entry := &cacheEntry{
-		providers:  providers,
-		cachedAt:   time.Now(),
-		isNegative: len(providers) == 0,
-	}
-	db.providerCache.Store(cid, entry)
+		for {
+			select {
+			case p, ok := <-providers:
+				if !ok {
+					goto ConnectPhase
+				}
+				finalProviders = append(finalProviders, p)
+				log.Printf("Found provider %d: %s", len(finalProviders), p.ID.String())
 
-	if len(providers) == 0 {
-		return fmt.Errorf("no providers found for CID")
-	}
+				// Connect immediately and track success
+				go func(info peer.AddrInfo) {
+					if db.connectProvider(findCtx, info) {
+						onConnected()
+					}
+				}(p)
 
-	// Start prefetch and wait with short timeout (500ms)
-	// If prefetch takes longer, it continues in background while download starts
-	prefetchDone := db.PrefetchFirstBlock(context.Background(), cid)
-	db.WaitForPrefetch(prefetchDone, 500*time.Millisecond)
+				// Early exit check: enough providers found
+				if len(finalProviders) >= minProvidersForEarlyExit {
+					log.Printf("Found %d providers, checking for early exit", len(finalProviders))
+					// Give a short window for connection to complete
+					select {
+					case <-earlyExit:
+						log.Printf("Early exit: connected to provider, proceeding with download")
+						goto ConnectPhase
+					case <-time.After(500 * time.Millisecond):
+						// Continue collecting more providers
+					}
+				}
 
-	log.Printf("Warmup complete for CID %s: %d providers discovered", cid, len(providers))
-	return nil
+			case <-earlyExit:
+				log.Printf("Early exit triggered: connected to provider")
+				goto ConnectPhase
+
+			case <-timeout:
+				log.Printf("Provider discovery timeout, found %d providers", len(finalProviders))
+				goto ConnectPhase
+
+			case <-findCtx.Done():
+				return nil, findCtx.Err()
+			}
+		}
+
+	ConnectPhase:
+		// Cache the result
+		entry := &cacheEntry{
+			providers:  finalProviders,
+			cachedAt:   time.Now(),
+			isNegative: len(finalProviders) == 0,
+		}
+		db.providerCache.Store(cid, entry)
+
+		if len(finalProviders) == 0 {
+			return nil, fmt.Errorf("no providers found for CID")
+		}
+
+		// Start prefetch and wait with short timeout (2000ms)
+		// If prefetch takes longer, it continues in background while download starts
+		prefetchDone := db.PrefetchFirstBlock(context.Background(), cid)
+		db.WaitForPrefetch(prefetchDone, 2000*time.Millisecond)
+
+		log.Printf("Warmup complete for CID %s: %d providers discovered", cid, len(finalProviders))
+		return nil, nil
+	})
+
+	return err
 }
 
 // connectProvider attempts to connect to a provider and returns success status
@@ -202,7 +215,7 @@ func (db *DownloadBooster) PrefetchFirstBlock(ctx context.Context, cid string) <
 	go func() {
 		defer close(done)
 
-		prefetchCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		prefetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
 
 		log.Printf("Prefetching first block for CID %s to establish Bitswap session", cid)
@@ -289,4 +302,51 @@ func (db *DownloadBooster) ClearCache() {
 func (db *DownloadBooster) ClearCacheForCID(cid string) {
 	db.providerCache.Delete(cid)
 	log.Printf("Provider cache cleared for CID: %s", cid)
+}
+
+// ClearNegativeCacheForCID removes ONLY negative cache entries for a specific CID
+func (db *DownloadBooster) ClearNegativeCacheForCID(cid string) {
+	if cached, ok := db.providerCache.Load(cid); ok {
+		entry := cached.(*cacheEntry)
+		if entry.isNegative {
+			db.providerCache.Delete(cid)
+			log.Printf("Negative provider cache cleared for CID: %s", cid)
+		}
+	}
+}
+
+// ManuallyAddProvider injects a known provider into the cache.
+// This is useful when we manually connect to a peer we know has the file.
+func (db *DownloadBooster) ManuallyAddProvider(cid string, info peer.AddrInfo) {
+	// Get or create entry
+	var entry *cacheEntry
+	if cached, ok := db.providerCache.Load(cid); ok {
+		entry = cached.(*cacheEntry)
+		// Reset negative cache if it was negative
+		if entry.isNegative {
+			entry.isNegative = false
+			entry.providers = []peer.AddrInfo{}
+		}
+	} else {
+		entry = &cacheEntry{
+			cachedAt:   time.Now(),
+			isNegative: false,
+		}
+	}
+
+	// Check if already exists
+	exists := false
+	for _, p := range entry.providers {
+		if p.ID == info.ID {
+			exists = true
+			break
+		}
+	}
+
+	if !exists {
+		entry.providers = append(entry.providers, info)
+		entry.cachedAt = time.Now() // Refresh timestamp
+		db.providerCache.Store(cid, entry)
+		log.Printf("Manually added provider %s for CID %s", info.ID.String(), cid)
+	}
 }

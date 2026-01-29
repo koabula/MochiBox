@@ -12,6 +12,8 @@ import (
 	"mochibox-core/db"
 
 	"github.com/gin-gonic/gin"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/multiformats/go-multiaddr"
 )
 
 func (s *Server) registerSharedRoutes(api *gin.RouterGroup) {
@@ -153,10 +155,27 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 	var wg sync.WaitGroup
 	wg.Add(len(peers))
 
+	// Parallel Strategy: Start DHT discovery IMMEDIATELY if CID is provided
+	// This ensures we don't wait for direct connections to fail before searching
+	if req.CID != "" {
+		// Only clear negative cache so we don't wipe out valid providers if any
+		s.DownloadBooster.ClearNegativeCacheForCID(req.CID)
+		
+		go func(cid string) {
+			// Start background warmup
+			log.Printf("Starting background warmup for %s concurrent with direct connect", cid)
+			if err := s.DownloadBooster.WarmupCID(context.Background(), cid); err != nil {
+				// Log but don't error, as we might still succeed via direct connect
+				log.Printf("Background warmup for %s finished: %v", cid, err)
+			}
+		}(req.CID)
+	}
+
 	for i, addr := range peers {
 		go func(i int, addr string) {
 			defer wg.Done()
-			ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+			// Reduced timeout from 30s to 15s to be more responsive
+			ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Second)
 			defer cancel()
 			if err := s.Node.Connect(ctx, addr); err != nil {
 				results[i] = connectResult{Addr: addr, OK: false, Error: err.Error()}
@@ -186,9 +205,20 @@ func (s *Server) handleSharedConnect(c *gin.Context) {
 		}
 	}
 
-	// Always clear cache if CID is provided, to allow immediate retry/discovery
+	// Post-Connect: If we connected successfully, inject providers
 	if req.CID != "" {
-		s.DownloadBooster.ClearCacheForCID(req.CID)
+		for _, r := range results {
+			if r.OK {
+				// Parse the multiaddr to get PeerID
+				ma, err := multiaddr.NewMultiaddr(r.Addr)
+				if err == nil {
+					info, err := peer.AddrInfoFromP2pAddr(ma)
+					if err == nil {
+						s.DownloadBooster.ManuallyAddProvider(req.CID, *info)
+					}
+				}
+			}
+		}
 	}
 
 	response := gin.H{

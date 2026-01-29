@@ -381,7 +381,7 @@ func (s *Server) runDownloadTask(ctx context.Context, task *DownloadTask) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sizeCtx, sizeCancel := context.WithTimeout(ctx, 10*time.Second)
+			sizeCtx, sizeCancel := context.WithTimeout(ctx, 30*time.Second)
 			defer sizeCancel()
 			if size, err := s.Node.GetFileSize(sizeCtx, task.CID); err == nil {
 				task.mu.Lock()

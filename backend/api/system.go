@@ -263,6 +263,10 @@ func (s *Server) handleNodeStatus(c *gin.Context) {
 				if ip.IsLinkLocalUnicast() {
 					continue
 				}
+				// Filter out benchmark/testnet IPs (198.18.0.0/15) often used by Docker/Virtualization
+				if strings.HasPrefix(ip.String(), "198.18.") || strings.HasPrefix(ip.String(), "198.19.") {
+					continue
+				}
 
 				var base string
 				if ip4 := ip.To4(); ip4 != nil {
